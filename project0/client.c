@@ -14,8 +14,6 @@
 #include <sys/socket.h>
 
 /* Some settings */
-typedef unsigned char byte;
-
 #define OP_ENC 0
 #define OP_DEC 1
 
@@ -30,11 +28,11 @@ uint16_t checksum(char, char, uint32_t, uint32_t, const char *);
 uint16_t unpack(const char *);
 /* Function implementations */
 int main(int argc, char **argv) {
-    char buf[MSG_MAX];
+    char *buf = (char *)malloc(MSG_MAX);
     char c, host[16] = "\0", *t_msg;
     int p=-1, mode=-1, s=-1, t;
     
-    int cnt, i;
+    int cnt=0, total_wrote=0;
     int sockfd;
     struct sockaddr_in sa;
     /*if(DEBUG) { 
@@ -57,7 +55,7 @@ int main(int argc, char **argv) {
                 p = atoi(optarg);
                 if(p < 1 || p > 65535) {
                     printf("Invalid port: %d\n", p);
-                    return 0;
+                    return -1;
                 }
                 break;
             case 'o':
@@ -68,7 +66,7 @@ int main(int argc, char **argv) {
                     mode = OP_DEC;
                 else {
                     printf("Invalid argument: -o [0, 1]\n");
-                    return 0;
+                    return -1;
                 }
                 break;
             case 's':
@@ -77,30 +75,30 @@ int main(int argc, char **argv) {
                 break;
             default:
                 printf("Unknown argument: -%c\n", optopt);
-                return 0;
+                return -1;
         }
     }
     
     if(host[0] == '\0' || p == -1 || mode == -1 || s == -1) {
         printf("There is(are) missing argument(s)\n");
-        return 0;
-    } 
-    if(DEBUG)
-        printf("%s %d %d %d\n", host, p, mode, s);
-    
+        return -1;
+    }  
     //Create socket
     sockfd = socket(AF_INET, SOCK_STREAM, 0);
     if(sockfd < 0) {
-       printf("Error to create socket");
-       return 0;
+        printf("Error to create socket");
+        return -1;
     }
     sa.sin_family = AF_INET;
-    sa.sin_port = p;
-    sa.sin_addr.s_addr = inet_addr(host);
+    sa.sin_port = htons(p);
+    if(inet_pton(AF_INET, host, &sa.sin_addr) <= 0) {
+        printf("Invalid address: %s\n", host);
+        return -1;
+    }
 
     if(connect(sockfd, (struct sockaddr *)&sa, sizeof(sa)) < 0) {
         printf("Error to connect %s:%d\n", host, p);
-        return 0;
+        return -1;
     }
     while((c = getchar()) != EOF) {
         buf[cnt++] = c;
@@ -108,21 +106,46 @@ int main(int argc, char **argv) {
         if(cnt == BUF_MAX - 16) {
             t = build_packet(&t_msg, mode, s, cnt, buf);
             write(sockfd, t_msg, t);    //send to server
-            free(t_msg);
+            total_wrote += cnt;
             cnt = 0;
         }
     }
     t = build_packet(&t_msg, mode, s, cnt, buf);
     write(sockfd, t_msg, t);
-    free(t_msg);
+    total_wrote += cnt;
     cnt = 0;
 
+    free(t_msg);
+
+    t_msg = (char *)malloc(MSG_MAX);
     //Now receive the packet
-    while((t = read(sockfd, t_msg, BUF_MAX)) != 0) {
-        for(i=0; i<t; i++) {
-            printf("%c", t_msg[i]);
+    while(total_wrote > 0) {
+        t = read(sockfd, t_msg, 8);
+        if(t < 8) {
+            printf("Error in response (malformed header)\n");
+            return -1;
         }
+        char op = t_msg[0];
+        char shift =  t_msg[1];
+        uint16_t chk = unpack(t_msg + 2);
+        uint32_t payload_len = (unpack(t_msg + 4) << 16) + unpack(t_msg+6);
+
+        t = read(sockfd, t_msg, payload_len);
+        if(t < (int)payload_len - 8) {
+            printf("Error in response (message length)\nExpected %d bytes, but %d bytes recieved.", payload_len - 8, t);
+            return -1;
+        }
+
+        uint16_t _checksum = checksum(op, shift, payload_len, payload_len - 8, t_msg);
+        if(_checksum != chk) {
+            printf("Error in response (checksum)\n");
+            return -1;
+        }
+
+        write(1, t_msg, payload_len);
+        total_wrote -= payload_len;
     }
+    close(sockfd);
     return 0;
 }
 
