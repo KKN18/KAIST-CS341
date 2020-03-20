@@ -20,7 +20,7 @@
 #define MSG_MAX 10000000
 #define BUF_MAX MSG_MAX-16
 
-#define DEBUG 1
+#define DEBUG 0
 /* Function declarations */
 int main(int, char **);
 uint32_t build_packet(char **, char, char, uint32_t, const char *);
@@ -141,8 +141,7 @@ int main(int argc, char **argv) {
             printf("Error in response (checksum)\n");
             return -1;
         }
-
-        write(1, t_msg, payload_len);
+        write(1, t_msg, payload_len - 8);
         total_wrote -= payload_len;
     }
     close(sockfd);
