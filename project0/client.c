@@ -17,8 +17,8 @@
 #define OP_ENC 0
 #define OP_DEC 1
 
-#define MSG_MAX 1000000
-#define BUF_MAX MSG_MAX-16
+#define MSG_MAX 10000000
+#define BUF_MAX MSG_MAX-30
 
 int VERBOSE = 0;
 /* Function declarations */
@@ -30,7 +30,7 @@ uint32_t read_n(int, char *, uint32_t);
 
 /* Function implementations */
 int main(int argc, char **argv) {
-    char *buf = (char *)malloc(MSG_MAX);
+    char *buf = (char *)malloc(BUF_MAX);
     char c, host[16] = "\0", *t_msg;
     int p=-1, mode=-1, s=-1, t;
     
@@ -111,52 +111,55 @@ int main(int argc, char **argv) {
     while((c = getchar()) != EOF) {
         buf[cnt++] = c;
 
-        if(cnt == BUF_MAX - 16) {
+        if(cnt == BUF_MAX) {
             t = build_packet(&t_msg, mode, s, cnt, buf);
-            printf("sending\n");
             write(sockfd, t_msg, t);    //send to server
-            printf(" done\n");
             total_wrote += cnt;
-            if(VERBOSE) printf("> %d bytes packet written (total : %d)\n", t, total_wrote);
+            if(VERBOSE) printf("> %d bytes packet written, chksum : %x (total : %d)\n",t, unpack(&t_msg[2]), total_wrote);
+            free(t_msg);
             cnt = 0;
         }
     }
     t = build_packet(&t_msg, mode, s, cnt, buf);
     write(sockfd, t_msg, t);
-    if(VERBOSE) printf("> %d bytes packet written\n", t);
+    if(VERBOSE) printf("> %d bytes packet written, chksum : %x (total : %d)\n", t, unpack(&t_msg[2]), total_wrote);
     total_wrote += cnt;
-    cnt = 0;
-
     free(t_msg);
-    printf("> totally %d bytes written\n", total_wrote);
+    if(VERBOSE) printf("> totally %d bytes written\n", total_wrote);
+    
     t_msg = (char *)malloc(MSG_MAX);
     //Now receive the packet
     while(total_wrote > 0) {
         if(VERBOSE) printf("> Waiting to recieve header\n");
         t = read_n(sockfd, t_msg, 8);
+        
         if(VERBOSE) printf("> Recieved header\n");
         if(t < 8) {
             printf("Error in response (malformed header)\n");
             return -1;
         }
+        
         char op = t_msg[0];
         char shift =  t_msg[1];
         uint16_t chk = unpack(t_msg + 2);
-        uint32_t payload_len = (unpack(t_msg + 4) << 16) + unpack(t_msg+6);
+        uint32_t msg_len = (unpack(t_msg + 4) << 16) + unpack(t_msg+6), payload_len = msg_len - 8;
+        
         if(VERBOSE) printf("> Waiting to recieve string");
-        t = read_n(sockfd, t_msg, payload_len - 8);
+        t = read_n(sockfd, buf, payload_len);
+        
         if(VERBOSE) printf("> Received string\n");
-        if(t < (int)payload_len - 8) {
+        
+        if(t < (int)payload_len) {
             printf("Error in response (message length)\nExpected %d bytes, but %d bytes recieved.", payload_len - 8, t);
             return -1;
         }
 
-        uint16_t _checksum = checksum(op, shift, payload_len, payload_len - 8, t_msg);
+        uint16_t _checksum = checksum(op, shift, msg_len, payload_len, buf);
         if(_checksum != chk) {
             printf("Error in response (checksum)\nExcpected %x as checksum, but %x was recieved as checksum", _checksum, chk);
             return -1;
         }
-        write(1, t_msg, payload_len - 8);
+        write(1, buf, payload_len);
         total_wrote -= payload_len;
     }
     close(sockfd);
@@ -176,8 +179,8 @@ uint32_t build_packet(char **out, char op, char shift, uint32_t payload_length, 
         return -11; //malloc failed
 
     uint16_t c = checksum(op, shift, msg_length, payload_length, payload);
-    buf[0] = op;
-    buf[1] = shift;
+    buf[0] = (unsigned) op & 0xff;
+    buf[1] = (unsigned) shift & 0xff;
     buf[2] = (c >> 8) & 0xff;
     buf[3] = (c) & 0xff;
     buf[4] = (msg_length >> 24) & 0xff;
@@ -196,22 +199,23 @@ uint16_t checksum(char op, char shift, uint32_t length, uint32_t buf_size, const
     unsigned int sum=0;
  
     //Handle header
-    sum += (op << 8) + shift;
+    sum += ((op & 0xff) << 8) + (shift & 0xff);
     sum += (((length >> 24) & 0xff) << 8) + ((length >> 16) & 0xff);
     sum += (((length >> 8) & 0xff ) << 8) + (length & 0xff);
     
     if(buf_size % 2 == 1) {
-        sum += (unsigned int) buf[buf_size - 1] << 8;
+        sum += (unsigned int) (buf[buf_size - 1] & 0xff) << 8;
          
     }
-    while(i+1 < buf_size) {
-        sum += unpack(&buf[i]);
-        i += 2;
-    }
-
     while(sum >> 16)
         sum = (sum & 0xFFFF) + (sum >> 16);
-   
+
+    while(i+1 < buf_size) {
+        sum += unpack(&buf[i]);
+        while(sum >> 16)
+            sum = (sum & 0xFFFF) + (sum >> 16);   
+        i += 2;
+    } 
 
     return ~sum;
 }
@@ -224,7 +228,8 @@ uint16_t unpack(const char *ptr) {
 }
 
 uint32_t read_n(int sockfd, char *out, uint32_t length) {
-    uint32_t r_amt=0, t=0;
+    uint32_t r_amt=0;
+    int t=0;
     if(length == 0)
         return 0;
     while(r_amt != length) {
