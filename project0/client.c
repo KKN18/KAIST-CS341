@@ -17,15 +17,17 @@
 #define OP_ENC 0
 #define OP_DEC 1
 
-#define MSG_MAX 10000000
+#define MSG_MAX 1000000
 #define BUF_MAX MSG_MAX-16
 
-#define DEBUG 0
+int VERBOSE = 0;
 /* Function declarations */
 int main(int, char **);
 uint32_t build_packet(char **, char, char, uint32_t, const char *);
 uint16_t checksum(char, char, uint32_t, uint32_t, const char *);
 uint16_t unpack(const char *);
+uint32_t read_n(int, char *, uint32_t);
+
 /* Function implementations */
 int main(int argc, char **argv) {
     char *buf = (char *)malloc(MSG_MAX);
@@ -35,7 +37,7 @@ int main(int argc, char **argv) {
     int cnt=0, total_wrote=0;
     int sockfd;
     struct sockaddr_in sa;
-    /*if(DEBUG) { 
+    /*if(VERBOSE) { 
         char c;
         int i =0, j=0;
         while((c = getchar()) != EOF) {
@@ -45,8 +47,9 @@ int main(int argc, char **argv) {
         int t=build_packet(&x, OP_ENC, 1, i, buf);
         for(j=0; j<t; j++)
             printf ("%c", x[j] & 0xff);
+        return 0;
     }*/
-    while((c = getopt(argc, argv, "h:p:o:s:")) != -1) {
+    while((c = getopt(argc, argv, "h:p:o:s:v")) != -1) {
         switch(c) {
             case 'h':
                 strncpy(host, optarg, 15);
@@ -72,6 +75,9 @@ int main(int argc, char **argv) {
             case 's':
                 t = atoi(optarg);
                 s = t & 0xFFFF;
+                break;
+            case 'v':
+                VERBOSE = 1;
                 break;
             default:
                 printf("Unknown argument: -%c\n", optopt);
@@ -100,27 +106,35 @@ int main(int argc, char **argv) {
         printf("Error to connect %s:%d\n", host, p);
         return -1;
     }
+
+    if(VERBOSE) printf("> connected\n");
     while((c = getchar()) != EOF) {
         buf[cnt++] = c;
 
         if(cnt == BUF_MAX - 16) {
             t = build_packet(&t_msg, mode, s, cnt, buf);
+            printf("sending\n");
             write(sockfd, t_msg, t);    //send to server
+            printf(" done\n");
             total_wrote += cnt;
+            if(VERBOSE) printf("> %d bytes packet written (total : %d)\n", t, total_wrote);
             cnt = 0;
         }
     }
     t = build_packet(&t_msg, mode, s, cnt, buf);
     write(sockfd, t_msg, t);
+    if(VERBOSE) printf("> %d bytes packet written\n", t);
     total_wrote += cnt;
     cnt = 0;
 
     free(t_msg);
-
+    printf("> totally %d bytes written\n", total_wrote);
     t_msg = (char *)malloc(MSG_MAX);
     //Now receive the packet
     while(total_wrote > 0) {
-        t = read(sockfd, t_msg, 8);
+        if(VERBOSE) printf("> Waiting to recieve header\n");
+        t = read_n(sockfd, t_msg, 8);
+        if(VERBOSE) printf("> Recieved header\n");
         if(t < 8) {
             printf("Error in response (malformed header)\n");
             return -1;
@@ -129,8 +143,9 @@ int main(int argc, char **argv) {
         char shift =  t_msg[1];
         uint16_t chk = unpack(t_msg + 2);
         uint32_t payload_len = (unpack(t_msg + 4) << 16) + unpack(t_msg+6);
-
-        t = read(sockfd, t_msg, payload_len);
+        if(VERBOSE) printf("> Waiting to recieve string");
+        t = read_n(sockfd, t_msg, payload_len - 8);
+        if(VERBOSE) printf("> Received string\n");
         if(t < (int)payload_len - 8) {
             printf("Error in response (message length)\nExpected %d bytes, but %d bytes recieved.", payload_len - 8, t);
             return -1;
@@ -138,7 +153,7 @@ int main(int argc, char **argv) {
 
         uint16_t _checksum = checksum(op, shift, payload_len, payload_len - 8, t_msg);
         if(_checksum != chk) {
-            printf("Error in response (checksum)\n");
+            printf("Error in response (checksum)\nExcpected %x as checksum, but %x was recieved as checksum", _checksum, chk);
             return -1;
         }
         write(1, t_msg, payload_len - 8);
@@ -161,7 +176,6 @@ uint32_t build_packet(char **out, char op, char shift, uint32_t payload_length, 
         return -11; //malloc failed
 
     uint16_t c = checksum(op, shift, msg_length, payload_length, payload);
-
     buf[0] = op;
     buf[1] = shift;
     buf[2] = (c >> 8) & 0xff;
@@ -180,28 +194,43 @@ uint32_t build_packet(char **out, char op, char shift, uint32_t payload_length, 
 uint16_t checksum(char op, char shift, uint32_t length, uint32_t buf_size, const char *buf) {
     uint32_t i=0;
     unsigned int sum=0;
-
-    unsigned int t;
+ 
     //Handle header
-    sum+= t= ((unsigned int)op << 8) + (unsigned int)shift;
-    sum += t= (((length >> 24) & 0xff) << 8) + ((length >> 16) & 0xff);
-    sum +=t= (((length >> 8) & 0xff ) << 8) + (length & 0xff);
+    sum += (op << 8) + shift;
+    sum += (((length >> 24) & 0xff) << 8) + ((length >> 16) & 0xff);
+    sum += (((length >> 8) & 0xff ) << 8) + (length & 0xff);
     
-
     if(buf_size % 2 == 1) {
         sum += (unsigned int) buf[buf_size - 1] << 8;
+         
     }
     while(i+1 < buf_size) {
         sum += unpack(&buf[i]);
         i += 2;
     }
+
     while(sum >> 16)
         sum = (sum & 0xFFFF) + (sum >> 16);
-    
+   
+
     return ~sum;
 }
 
 uint16_t unpack(const char *ptr) {
-    //Assume ptr's size is two.
-    return ((unsigned)ptr[0] << 8) + ((unsigned)ptr[1]);
+    //unpack char[2] -> short
+    //
+    uint16_t t =  (((unsigned)ptr[0] & 0xff) << 8) + ((unsigned)ptr[1] & 0xff);
+    return t;
+}
+
+uint32_t read_n(int sockfd, char *out, uint32_t length) {
+    uint32_t r_amt=0, t=0;
+    if(length == 0)
+        return 0;
+    while(r_amt != length) {
+        if((t = read(sockfd, out + r_amt, length - r_amt)) < 0)
+            return 0;
+        r_amt += t;
+    }
+    return r_amt;
 }
