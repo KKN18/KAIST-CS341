@@ -52,14 +52,14 @@ int main(int argc, char **argv) {
                 VERBOSE = 1;
                 break;
             default:
-                printf("Unknown argument: -%c\n", optopt);
+                fprintf(stderr,"Unknown argument: -%c\n", optopt);
                 return -1;
         }
     }
 
     sockfd = socket(AF_INET, SOCK_STREAM, 0);
     if(sockfd == -1) {
-        printf("Failed to create socket\n");
+        fprintf(stderr,"Failed to create socket\n");
         return -1;
     }
 
@@ -68,29 +68,29 @@ int main(int argc, char **argv) {
     sa.sin_port = htons(port);
     
     if(bind(sockfd, (struct sockaddr *)&sa, sizeof(sa)) <0) {
-        printf("Failed to bind socket\n");
+        fprintf(stderr,"Failed to bind socket\n");
         return -1;
     }
     
     if(listen(sockfd, LISTENQ) < 0) {
-        printf("Failed to listen socket\n");
+        fprintf(stderr,"Failed to listen socket\n");
         return -1;
     }
 
     while(1) {
         c_len  = sizeof(ca);
         connfd = accept(sockfd, (struct sockaddr *)&ca, &c_len);
-        if(VERBOSE) printf("New connection estabilshed with fd %d\n", connfd);
+        if(VERBOSE) fprintf(stderr,"New connection estabilshed with fd %d\n", connfd);
         if((t = fork()) == 0) {
             while((t = process(connfd))) {
-                printf("[%d] sent %d bytes of string.\n", connfd, t);
+                fprintf(stderr,"[%d] sent %d bytes of string.\n", connfd, t);
             }
             
             close(connfd);
             return 0;
         }
         else if(t == -1) {
-            printf("Failed to fork a child.\n");
+            fprintf(stderr,"Failed to fork a child.\n");
             return -1;
         }
     }
@@ -103,21 +103,21 @@ int process(int connfd) {
     char *t_msg = (char *)malloc(MSG_MAX);
     char *buf = (char *)malloc(MSG_MAX);
 
-    if(VERBOSE) printf("[%d]> Waiting to recieve header\n", connfd);
+    if(VERBOSE) fprintf(stderr,"[%d]> Waiting to recieve header\n", connfd);
 
     t = read_n(connfd, t_msg, 8);
     
-    if(VERBOSE) printf("[%d]> Recieved header\n", connfd);
+    if(VERBOSE) fprintf(stderr,"[%d]> Recieved header\n", connfd);
     
     if(t == 0) {
         return -1;
     }
     else if (t < 0) {
-        printf("[%d] Socket read failed\n", connfd);
+        fprintf(stderr,"[%d] Socket read failed\n", connfd);
         exit(-1);
     }
     else if(t < 8) {
-        printf("[%d] Error in request (malformed header)\n", connfd);
+        fprintf(stderr,"[%d] Error in request (malformed header)\n", connfd);
         close(connfd);
         exit(-1);
     }
@@ -125,32 +125,33 @@ int process(int connfd) {
     shift =  t_msg[1];
 
     if(op != OP_ENC && op != OP_DEC) {
-        printf("[%d] Error in request (op)\n %d is unknown op\n", connfd, op);
+        fprintf(stderr,"[%d] Error in request (op)\n %d is unknown op\n", connfd, op);
         exit(-1);
     }
 
     chk = unpack(t_msg + 2);
     msg_len = (unpack(t_msg + 4) << 16) + unpack(t_msg+6);
     payload_len = msg_len - 8;
-    if(VERBOSE) printf("[%d]> Waiting to recieve string", connfd);
+    if(VERBOSE) fprintf(stderr,"[%d]> Waiting to recieve string", connfd);
     
     t = read_n(connfd, buf, payload_len);
-    if(VERBOSE) printf("[%d]> Received string\n", connfd);
+    if(VERBOSE) fprintf(stderr,"[%d]> Received string\n", connfd);
     
     if(t < (int)payload_len) {
-        printf("[%d] Error in request (message length)\nExpected %d bytes, but %d bytes recieved\n", connfd, payload_len, t);
+        fprintf(stderr,"[%d] Error in request (message length)\nExpected %d bytes, but %d bytes recieved\n", connfd, payload_len, t);
         exit(-1);
     }
 
     _checksum = checksum(op, shift, msg_len, payload_len, buf);
 
+    if(VERBOSE) 
+
     if(_checksum != chk) {
-        printf("[%d] Error in request (checksum)\nExcpected %x as checksum, but %x was recieved as checksum\n", connfd, _checksum, chk);
+        fprintf(stderr,"[%d] Error in request (checksum)\nExcpected %x as checksum, but %x was recieved as checksum\n", connfd, _checksum, chk);
         exit(-1);
     }
     
-
-    _shift = (shift % 26) + 26;
+    _shift = (shift % 26 + 26) % 26;
     if(op == OP_DEC)
         _shift = 26 - _shift;
     
@@ -172,7 +173,7 @@ int str_crypt(char *buf, int key, int size) {
         if('A' <= buf[i] && buf[i] <= 'Z')
             buf[i] += U2L;
         if('a' <= buf[i] && buf[i] <= 'z')
-            buf[i] = 'a' + (buf[i] - 'a' + key) % 26;
+            buf[i] = 'a' + ((buf[i] - 'a' + key) % 26);
     }
     return i;
 }

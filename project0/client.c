@@ -17,7 +17,7 @@
 #define OP_ENC 0
 #define OP_DEC 1
 
-#define MSG_MAX 10000000
+#define MSG_MAX 5*1000*1000
 #define BUF_MAX MSG_MAX-30
 
 int VERBOSE = 0;
@@ -28,13 +28,15 @@ uint16_t checksum(char, char, uint32_t, uint32_t, const char *);
 uint16_t unpack(const char *);
 uint32_t read_n(int, char *, uint32_t);
 
+
 /* Function implementations */
 int main(int argc, char **argv) {
     char *buf = (char *)malloc(BUF_MAX);
-    char c, host[16] = "\0", *t_msg;
+    char c, host[16] = "\0", *t_msg, op, shift;
     int p=-1, mode=-1, s=-1, t;
     
-    int cnt=0, total_wrote=0;
+    uint16_t chk;
+    int cnt=0, msg_len, payload_len;
     int sockfd;
     struct sockaddr_in sa;
     /*if(VERBOSE) { 
@@ -57,7 +59,7 @@ int main(int argc, char **argv) {
             case 'p':
                 p = atoi(optarg);
                 if(p < 1 || p > 65535) {
-                    printf("Invalid port: %d\n", p);
+                    fprintf(stderr,"Invalid port: %d\n", p);
                     return -1;
                 }
                 break;
@@ -68,100 +70,130 @@ int main(int argc, char **argv) {
                 else if(t == 1)
                     mode = OP_DEC;
                 else {
-                    printf("Invalid argument: -o [0, 1]\n");
+                    fprintf(stderr,"Invalid argument: -o [0, 1]\n");
                     return -1;
                 }
                 break;
             case 's':
                 t = atoi(optarg);
+                t %= 26;
+                if(t < 0)
+                    t += 26;
                 s = t & 0xFFFF;
                 break;
             case 'v':
                 VERBOSE = 1;
                 break;
             default:
-                printf("Unknown argument: -%c\n", optopt);
+                fprintf(stderr,"Unknown argument: -%c\n", optopt);
                 return -1;
         }
     }
     
     if(host[0] == '\0' || p == -1 || mode == -1 || s == -1) {
-        printf("There is(are) missing argument(s)\n");
+        fprintf(stderr,"There is(are) missing argument(s)\n");
         return -1;
     }  
     //Create socket
     sockfd = socket(AF_INET, SOCK_STREAM, 0);
     if(sockfd < 0) {
-        printf("Error to create socket");
+        fprintf(stderr,"Error to create socket");
         return -1;
     }
     sa.sin_family = AF_INET;
     sa.sin_port = htons(p);
     if(inet_pton(AF_INET, host, &sa.sin_addr) <= 0) {
-        printf("Invalid address: %s\n", host);
+        fprintf(stderr,"Invalid address: %s\n", host);
         return -1;
     }
 
     if(connect(sockfd, (struct sockaddr *)&sa, sizeof(sa)) < 0) {
-        printf("Error to connect %s:%d\n", host, p);
+        fprintf(stderr,"Error to connect %s:%d\n", host, p);
         return -1;
     }
 
-    if(VERBOSE) printf("> connected\n");
+    if(VERBOSE) fprintf(stderr,"> connected\n");
     while((c = getchar()) != EOF) {
         buf[cnt++] = c;
 
         if(cnt == BUF_MAX) {
             t = build_packet(&t_msg, mode, s, cnt, buf);
-            write(sockfd, t_msg, t);    //send to server
-            total_wrote += cnt;
-            if(VERBOSE) printf("> %d bytes packet written, chksum : %x (total : %d)\n",t, unpack(&t_msg[2]), total_wrote);
+            write(sockfd, t_msg, t);
+            
+            if(VERBOSE) fprintf(stderr,"> %d bytes packet written, chksum : %x\n",t, unpack(&t_msg[2]));
+            if(VERBOSE) fprintf(stderr,"> Waiting to recieve header\n");
+            
+            t = read_n(sockfd, t_msg, 8);
+            if(VERBOSE) fprintf(stderr,"> Recieved header\n");
+            if(t < 8) {
+                fprintf(stderr,"Error in response (malformed header)\n");
+                return -1;
+            }
+            
+            op = t_msg[0];
+            shift =  t_msg[1];
+            chk = unpack(t_msg + 2);
+            msg_len = (unpack(t_msg + 4) << 16) + unpack(t_msg+6);
+            payload_len = msg_len - 8;
+            
+            if(VERBOSE) fprintf(stderr,"> Waiting to recieve string");
+            t = read_n(sockfd, buf, payload_len);
+            
+            if(VERBOSE) fprintf(stderr,"> Received string\n");
+            
+            if(t < (int)payload_len) {
+                fprintf(stderr,"Error in response (message length)\nExpected %d bytes, but %d bytes recieved.", payload_len - 8, t);
+                return -1;
+            }
+
+            uint16_t _checksum = checksum(op, shift, msg_len, payload_len, buf);
+            if(_checksum != chk) {
+                fprintf(stderr,"Error in response (checksum)\nExcpected %x as checksum, but %x was recieved as checksum", _checksum, chk);
+                return -1;
+            }
+            write(1, buf, payload_len);
+            
             free(t_msg);
             cnt = 0;
         }
     }
     t = build_packet(&t_msg, mode, s, cnt, buf);
     write(sockfd, t_msg, t);
-    if(VERBOSE) printf("> %d bytes packet written, chksum : %x (total : %d)\n", t, unpack(&t_msg[2]), total_wrote);
-    total_wrote += cnt;
-    free(t_msg);
-    if(VERBOSE) printf("> totally %d bytes written\n", total_wrote);
     
-    t_msg = (char *)malloc(MSG_MAX);
-    //Now receive the packet
-    while(total_wrote > 0) {
-        if(VERBOSE) printf("> Waiting to recieve header\n");
-        t = read_n(sockfd, t_msg, 8);
-        
-        if(VERBOSE) printf("> Recieved header\n");
-        if(t < 8) {
-            printf("Error in response (malformed header)\n");
-            return -1;
-        }
-        
-        char op = t_msg[0];
-        char shift =  t_msg[1];
-        uint16_t chk = unpack(t_msg + 2);
-        uint32_t msg_len = (unpack(t_msg + 4) << 16) + unpack(t_msg+6), payload_len = msg_len - 8;
-        
-        if(VERBOSE) printf("> Waiting to recieve string");
-        t = read_n(sockfd, buf, payload_len);
-        
-        if(VERBOSE) printf("> Received string\n");
-        
-        if(t < (int)payload_len) {
-            printf("Error in response (message length)\nExpected %d bytes, but %d bytes recieved.", payload_len - 8, t);
-            return -1;
-        }
-
-        uint16_t _checksum = checksum(op, shift, msg_len, payload_len, buf);
-        if(_checksum != chk) {
-            printf("Error in response (checksum)\nExcpected %x as checksum, but %x was recieved as checksum", _checksum, chk);
-            return -1;
-        }
-        write(1, buf, payload_len);
-        total_wrote -= payload_len;
+    if(VERBOSE) fprintf(stderr,"> %d bytes packet written, chksum : %x\n",t, unpack(&t_msg[2]));
+    if(VERBOSE) fprintf(stderr,"> Waiting to recieve header\n");
+    
+    t = read_n(sockfd, t_msg, 8);
+    if(VERBOSE) fprintf(stderr,"> Recieved header\n");
+    if(t < 8) {
+        fprintf(stderr,"Error in response (malformed header)\n");
+        return -1;
     }
+    
+    op = t_msg[0];
+    shift =  t_msg[1];
+    chk = unpack(t_msg + 2);
+    msg_len = (unpack(t_msg + 4) << 16) + unpack(t_msg+6);
+    payload_len = msg_len - 8;
+    
+    if(VERBOSE) fprintf(stderr,"> Waiting to recieve string");
+    t = read_n(sockfd, buf, payload_len);
+    
+    if(VERBOSE) fprintf(stderr,"> Received string\n");
+    
+    if(t < (int)payload_len) {
+        fprintf(stderr,"Error in response (message length)\nExpected %d bytes, but %d bytes recieved.", payload_len - 8, t);
+        return -1;
+    }
+
+    uint16_t _checksum = checksum(op, shift, msg_len, payload_len, buf);
+    if(_checksum != chk) {
+        fprintf(stderr,"Error in response (checksum)\nExcpected %x as checksum, but %x was recieved as checksum", _checksum, chk);
+        return -1;
+    }
+    write(1, buf, payload_len);
+    
+    free(t_msg);
     close(sockfd);
     return 0;
 }
