@@ -121,10 +121,10 @@ int main(int argc, char **argv) {
             write(sockfd, t_msg, t);
             
             if(VERBOSE) fprintf(stderr,"> %d bytes packet written, chksum : %x\n",t, unpack(&t_msg[2]));
-            if(VERBOSE) fprintf(stderr,"> Waiting to recieve header\n");
+            if(VERBOSE) fprintf(stderr,"> Waiting to receive header\n");
             
             t = read_n(sockfd, t_msg, 8);
-            if(VERBOSE) fprintf(stderr,"> Recieved header\n");
+            if(VERBOSE) fprintf(stderr,"> Received header\n");
             if(t < 8) {
                 fprintf(stderr,"Error in response (malformed header)\n");
                 return -1;
@@ -136,19 +136,19 @@ int main(int argc, char **argv) {
             msg_len = (unpack(t_msg + 4) << 16) + unpack(t_msg+6);
             payload_len = msg_len - 8;
             
-            if(VERBOSE) fprintf(stderr,"> Waiting to recieve string\n");
+            if(VERBOSE) fprintf(stderr,"> Waiting to receive string\n");
             t = read_n(sockfd, buf, payload_len);
             
             if(VERBOSE) fprintf(stderr,"> Received string\n");
             
             if(t < (int)payload_len) {
-                fprintf(stderr,"Error in response (message length)\nExpected %d bytes, but %d bytes recieved.", payload_len - 8, t);
+                fprintf(stderr,"Error in response (message length)\nExpected %d bytes, but %d bytes received.", payload_len - 8, t);
                 return -1;
             }
 
             uint16_t _checksum = checksum(op, shift, msg_len, payload_len, buf);
             if(_checksum != chk) {
-                fprintf(stderr,"Error in response (checksum)\nExcpected %x as checksum, but %x was recieved as checksum", _checksum, chk);
+                fprintf(stderr,"Error in response (checksum)\nExcpected %x as checksum, but %x was received as checksum", _checksum, chk);
                 return -1;
             }
             write(1, buf, payload_len);
@@ -161,10 +161,10 @@ int main(int argc, char **argv) {
     write(sockfd, t_msg, t);
     
     if(VERBOSE) fprintf(stderr,"> %d bytes packet written, chksum : %x\n",t, unpack(&t_msg[2]));
-    if(VERBOSE) fprintf(stderr,"> Waiting to recieve header\n");
+    if(VERBOSE) fprintf(stderr,"> Waiting to receive header\n");
     
     t = read_n(sockfd, t_msg, 8);
-    if(VERBOSE) fprintf(stderr,"> Recieved header\n");
+    if(VERBOSE) fprintf(stderr,"> Received header\n");
     if(t < 8) {
         fprintf(stderr,"Error in response (malformed header)\n");
         return -1;
@@ -176,19 +176,19 @@ int main(int argc, char **argv) {
     msg_len = (unpack(t_msg + 4) << 16) + unpack(t_msg+6);
     payload_len = msg_len - 8;
     
-    if(VERBOSE) fprintf(stderr,"> Waiting to recieve string");
+    if(VERBOSE) fprintf(stderr,"> Waiting to receive string\n");
     t = read_n(sockfd, buf, payload_len);
     
     if(VERBOSE) fprintf(stderr,"> Received string\n");
     
     if(t < (int)payload_len) {
-        fprintf(stderr,"Error in response (message length)\nExpected %d bytes, but %d bytes recieved.", payload_len - 8, t);
+        fprintf(stderr,"Error in response (message length)\nExpected %d bytes, but %d bytes received.", payload_len - 8, t);
         return -1;
     }
 
     uint16_t _checksum = checksum(op, shift, msg_len, payload_len, buf);
     if(_checksum != chk) {
-        fprintf(stderr,"Error in response (checksum)\nExcpected %x as checksum, but %x was recieved as checksum", _checksum, chk);
+        fprintf(stderr,"Error in response (checksum)\nExcpected %x as checksum, but %x was received as checksum", _checksum, chk);
         return -1;
     }
     write(1, buf, payload_len);
