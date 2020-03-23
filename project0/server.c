@@ -62,6 +62,7 @@ int main(int argc, char **argv) {
         fprintf(stderr,"Failed to create socket\n");
         return -1;
     }
+    if(VERBOSE) fprintf(stderr, "Complete to create socket\n");
 
     sa.sin_family = AF_INET;
     sa.sin_addr.s_addr = INADDR_ANY;
@@ -70,12 +71,14 @@ int main(int argc, char **argv) {
     if(bind(sockfd, (struct sockaddr *)&sa, sizeof(sa)) <0) {
         fprintf(stderr,"Failed to bind socket\n");
         return -1;
-    }
+    } 
+    if(VERBOSE) fprintf(stderr, "Complete to bind socket\n");
     
     if(listen(sockfd, LISTENQ) < 0) {
         fprintf(stderr,"Failed to listen socket\n");
         return -1;
     }
+    if(VERBOSE) fprintf(stderr, "Listening now.. \n");
 
     while(1) {
         c_len  = sizeof(ca);
@@ -132,7 +135,7 @@ int process(int connfd) {
     chk = unpack(t_msg + 2);
     msg_len = (unpack(t_msg + 4) << 16) + unpack(t_msg+6);
     payload_len = msg_len - 8;
-    if(VERBOSE) fprintf(stderr,"[%d]> Waiting to recieve string", connfd);
+    if(VERBOSE) fprintf(stderr,"[%d]> Waiting to recieve string\n", connfd);
     
     t = read_n(connfd, buf, payload_len);
     if(VERBOSE) fprintf(stderr,"[%d]> Received string\n", connfd);
