@@ -17,7 +17,7 @@
 #define OP_ENC 0
 #define OP_DEC 1
 
-#define MSG_MAX 5*1000*1000
+#define MSG_MAX 9*1000*1000
 #define BUF_MAX MSG_MAX-30
 
 int VERBOSE = 0;
@@ -136,7 +136,7 @@ int main(int argc, char **argv) {
             msg_len = (unpack(t_msg + 4) << 16) + unpack(t_msg+6);
             payload_len = msg_len - 8;
             
-            if(VERBOSE) fprintf(stderr,"> Waiting to recieve string");
+            if(VERBOSE) fprintf(stderr,"> Waiting to recieve string\n");
             t = read_n(sockfd, buf, payload_len);
             
             if(VERBOSE) fprintf(stderr,"> Received string\n");
