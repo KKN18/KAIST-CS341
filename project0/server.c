@@ -36,7 +36,7 @@ uint32_t read_n(int, char *, uint32_t);
 int process(int);
 
 int main(int argc, char **argv) {
-    int port, sockfd, connfd;
+    int port=-1, sockfd, connfd;
     int t;
     socklen_t c_len;
     struct sockaddr_in sa, ca;
@@ -56,7 +56,10 @@ int main(int argc, char **argv) {
                 return -1;
         }
     }
-
+    if(port <0 || port > 65535) {
+        fprintf(stderr, "Port is invalid or not given\n");
+        return -1;
+    }
     sockfd = socket(AF_INET, SOCK_STREAM, 0);
     if(sockfd == -1) {
         fprintf(stderr,"Failed to create socket\n");
@@ -85,10 +88,10 @@ int main(int argc, char **argv) {
         connfd = accept(sockfd, (struct sockaddr *)&ca, &c_len);
         if(VERBOSE) fprintf(stderr,"New connection estabilshed with fd %d\n", connfd);
         if((t = fork()) == 0) {
-            while((t = process(connfd))) {
-                fprintf(stderr,"[%d] sent %d bytes of string.\n", connfd, t);
+            while((t = process(connfd)) >= 0 ) {
+                fprintf(stderr,"[%d]> sent %d bytes of string.\n", connfd, t);
             }
-            
+            if(VERBOSE) fprintf(stderr, "[%d]> Connection Closed.\n", connfd);
             close(connfd);
             return 0;
         }
@@ -106,11 +109,11 @@ int process(int connfd) {
     char *t_msg = (char *)malloc(MSG_MAX);
     char *buf = (char *)malloc(MSG_MAX);
 
-    if(VERBOSE) fprintf(stderr,"[%d]> Waiting to recieve header\n", connfd);
+    if(VERBOSE) fprintf(stderr,"[%d]> Waiting to receive header\n", connfd);
 
     t = read_n(connfd, t_msg, 8);
     
-    if(VERBOSE) fprintf(stderr,"[%d]> Recieved header\n", connfd);
+    if(VERBOSE) fprintf(stderr,"[%d]> Received header\n", connfd);
     
     if(t == 0) {
         return -1;
@@ -134,14 +137,20 @@ int process(int connfd) {
 
     chk = unpack(t_msg + 2);
     msg_len = (unpack(t_msg + 4) << 16) + unpack(t_msg+6);
+    
+    if(msg_len < 8 || msg_len > MSG_MAX) {
+        fprintf(stderr, "[%d] Invalid length : %d", connfd, msg_len);
+        exit(-1);
+    }
+
     payload_len = msg_len - 8;
-    if(VERBOSE) fprintf(stderr,"[%d]> Waiting to recieve string\n", connfd);
+    if(VERBOSE) fprintf(stderr,"[%d]> Waiting to receive string\n", connfd);
     
     t = read_n(connfd, buf, payload_len);
     if(VERBOSE) fprintf(stderr,"[%d]> Received string\n", connfd);
     
     if(t < (int)payload_len) {
-        fprintf(stderr,"[%d] Error in request (message length)\nExpected %d bytes, but %d bytes recieved\n", connfd, payload_len, t);
+        fprintf(stderr,"[%d] Error in request (message length)\nExpected %d bytes, but %d bytes received\n", connfd, payload_len, t);
         exit(-1);
     }
 
@@ -150,7 +159,7 @@ int process(int connfd) {
     if(VERBOSE) 
 
     if(_checksum != chk) {
-        fprintf(stderr,"[%d] Error in request (checksum)\nExcpected %x as checksum, but %x was recieved as checksum\n", connfd, _checksum, chk);
+        fprintf(stderr,"[%d] Error in request (checksum)\nExcpected %x as checksum, but %x was received as checksum\n", connfd, _checksum, chk);
         exit(-1);
     }
     
@@ -247,7 +256,11 @@ uint32_t read_n(int sockfd, char *out, uint32_t length) {
     if(length == 0)
         return 0;
     while(r_amt != length) {
-        if((t = read(sockfd, out + r_amt, length - r_amt)) < 0)
+        t = read(sockfd, out + r_amt, length - r_amt);
+
+        if(t < 0)
+            return -1;
+        else if(t == 0)
             return 0;
         r_amt += t;
     }
