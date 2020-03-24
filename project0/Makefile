@@ -2,7 +2,7 @@
 # Jihwan Kim, KAIST
 
 CC = gcc
-CFLAGS = -W -Wall
+CFLAGS = -W -Wall -Werror
 
 all: client server
 
