@@ -56,7 +56,7 @@ int main(int argc, char **argv) {
                 return -1;
         }
     }
-    if(port <0 || port > 65535) {
+    if(port < 0 || port > 65535) {
         fprintf(stderr, "Port is invalid or not given\n");
         return -1;
     }
@@ -189,19 +189,19 @@ int str_crypt(char *buf, int key, int size) {
     }
     return i;
 }
-uint32_t build_packet(char **out, char op, char shift, uint32_t payload_length, const char *payload) { 
-    if(op != OP_ENC && op != OP_DEC)
+uint32_t build_packet(char **out, char op, char shift, uint32_t payload_length, const char *payload) {  
+    uint32_t msg_length = 8 + payload_length;
+    char *buf = (char *)malloc(msg_length);
+    uint16_t c;
+
+   if(op != OP_ENC && op != OP_DEC)
         return -1; //Invalid op
     if(payload_length > MSG_MAX - 8)
         return -2; //Too large body
-
-    uint32_t msg_length = 8 + payload_length;
-    char *buf = (char *)malloc(msg_length);
-
     if(out == NULL)
         return -11; //malloc failed
 
-    uint16_t c = checksum(op, shift, msg_length, payload_length, payload);
+    c = checksum(op, shift, msg_length, payload_length, payload);
     buf[0] = (unsigned) op & 0xff;
     buf[1] = (unsigned) shift & 0xff;
     buf[2] = (c >> 8) & 0xff;
