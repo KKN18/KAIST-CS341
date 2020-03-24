@@ -35,22 +35,11 @@ int main(int argc, char **argv) {
     char c, host[16] = "\0", *t_msg, op, shift;
     int p=-1, mode=-1, s=-1, t;
     
-    uint16_t chk;
+    uint16_t chk, _checksum;
     int cnt=0, msg_len, payload_len;
     int sockfd;
     struct sockaddr_in sa;
-    /*if(VERBOSE) { 
-        char c;
-        int i =0, j=0;
-        while((c = getchar()) != EOF) {
-            buf[i++] = c;
-        }
-        char *x;
-        int t=build_packet(&x, OP_ENC, 1, i, buf);
-        for(j=0; j<t; j++)
-            printf ("%c", x[j] & 0xff);
-        return 0;
-    }*/
+    
     while((c = getopt(argc, argv, "h:p:o:s:v")) != -1) {
         switch(c) {
             case 'h':
@@ -58,7 +47,7 @@ int main(int argc, char **argv) {
                 break;
             case 'p':
                 p = atoi(optarg);
-                if(p < 1 || p > 65535) {
+                if(p < 0 || p > 65535) {
                     fprintf(stderr,"Invalid port: %d\n", p);
                     return -1;
                 }
@@ -146,7 +135,7 @@ int main(int argc, char **argv) {
                 return -1;
             }
 
-            uint16_t _checksum = checksum(op, shift, msg_len, payload_len, buf);
+            _checksum = checksum(op, shift, msg_len, payload_len, buf);
             if(_checksum != chk) {
                 fprintf(stderr,"Error in response (checksum)\nExcpected %x as checksum, but %x was received as checksum", _checksum, chk);
                 return -1;
@@ -186,7 +175,7 @@ int main(int argc, char **argv) {
         return -1;
     }
 
-    uint16_t _checksum = checksum(op, shift, msg_len, payload_len, buf);
+    _checksum = checksum(op, shift, msg_len, payload_len, buf);
     if(_checksum != chk) {
         fprintf(stderr,"Error in response (checksum)\nExcpected %x as checksum, but %x was received as checksum", _checksum, chk);
         return -1;
@@ -199,18 +188,20 @@ int main(int argc, char **argv) {
 }
 
 uint32_t build_packet(char **out, char op, char shift, uint32_t payload_length, const char *payload) { 
-    if(op != OP_ENC && op != OP_DEC)
-        return -1; //Invalid op
-    if(payload_length > MSG_MAX - 8)
-        return -2; //Too large body
-
     uint32_t msg_length = 8 + payload_length;
     char *buf = (char *)malloc(msg_length);
+    uint16_t c;
+    
+    if(op != OP_ENC && op != OP_DEC)
+        return -1; //Invalid op
+    
+    if(payload_length > MSG_MAX - 8)
+        return -2; //Too large body
 
     if(out == NULL)
         return -11; //malloc failed
 
-    uint16_t c = checksum(op, shift, msg_length, payload_length, payload);
+    c = checksum(op, shift, msg_length, payload_length, payload);
     buf[0] = (unsigned) op & 0xff;
     buf[1] = (unsigned) shift & 0xff;
     buf[2] = (c >> 8) & 0xff;
