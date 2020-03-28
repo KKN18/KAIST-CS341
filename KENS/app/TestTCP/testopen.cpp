@@ -57,10 +57,13 @@ protected:
 						duplicated++;
 				}
 			}
+
 			for(int k=0; k<test_size; k++)
 			{
 				close(fd_array[k]);
 			}
+
+			fflush(stdout);
 		}
 		EXPECT_EQ(success, ((size_t)test_size) * ((size_t)test_repeat));
 		EXPECT_EQ(failed, 0);
