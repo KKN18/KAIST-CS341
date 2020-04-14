@@ -1,3 +1,4 @@
-# KAIST CS341 Projectes
+# KAIST CS341 Projects
 
  - Project #0 : Socket Programming
+ - Project #1 : KENS-Context Management
