@@ -25,8 +25,9 @@
 #define TCP_FLAG_FIN 1
 #define TCP_FLAG_SYN 2
 #define TCP_FLAG_ACK 16
-
 #define TCP_WIN_SIZE 51200
+
+#define TCP_MSL 60
 
 namespace E
 {
@@ -39,6 +40,12 @@ enum TcpState
     SYNSENT,
     SYNRCVD,
     ESTAB,
+    FINWAIT_1,
+    CLOSING,
+    CLOSE_WAIT,
+    FINWAIT_2,
+    LAST_ACK,
+    TIMED_WAIT
 };
 
 typedef std::pair<int, int> Desc_t; // (pid, fid)
@@ -78,7 +85,9 @@ typedef struct _Socket
     //bool isServer = false;
     bool isMaster = false;
     bool isBound;
-    
+
+    //Timer
+    UUID timerUUID;    
 } Socket;
 
 typedef struct _TCP {
@@ -120,6 +129,7 @@ private:
     Socket *dupSocket(const Socket *orig);
     void finalizeServerEstablish(Socket *m, Socket *socket);
     void dumpSocket(const Socket *s);
+    void cleanSocket(Socket *);
     
 public:
 	TCPAssignment(Host* host);
