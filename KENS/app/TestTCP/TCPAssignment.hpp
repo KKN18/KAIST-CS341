@@ -15,7 +15,7 @@
 #include <netinet/tcp.h>
 #include <netinet/ip.h>
 #include <netinet/in.h>
-#include <vector>
+#include <list>
 #include <queue>
 #include <map>
 #include <utility>
@@ -26,6 +26,7 @@
 #define TCP_FLAG_SYN 2
 #define TCP_FLAG_ACK 16
 #define TCP_WIN_SIZE 51200
+#define TCP_DATA_MAX 512
 
 #define TCP_MSL 60
 
@@ -53,6 +54,13 @@ typedef std::pair<uint32_t, uint16_t> Addr_t; //(ip address, port)
 typedef struct sockaddr SA;
 typedef struct sockaddr_in SA_in;
 
+typedef struct _SockBuf {
+    uint32_t seq;
+    uint16_t len;
+    uint16_t offset;
+    uint8_t *buf;
+} SocketBuffer;
+
 typedef struct _Socket
 {
 	//process information
@@ -70,7 +78,16 @@ typedef struct _Socket
 
     uint32_t seqNum = 0;
     uint32_t ackNum = 0;
+    
+    //About data transmission
+    uint16_t winSize = TCP_WIN_SIZE;
+    uint16_t remoteWinSize = TCP_WIN_SIZE;
+    std::list<SocketBuffer *> sendBuf;
+    std::list<SocketBuffer *> localBuf;
 
+    uint16_t szSendBuf = 0;
+    uint16_t szLocalBuf = 0;
+    
     uint32_t backlogLimit;
     uint32_t numBacklogs;
     std::map<Addr_t, struct _Socket *> backlogs;
@@ -81,6 +98,10 @@ typedef struct _Socket
     UUID waitingSyscall;
     SA *waitingSA;
     socklen_t *waitingSocklen;
+    uint8_t *waitingBuf;
+    uint8_t waitingCnt;
+    uint8_t waitingRemain;
+    uint16_t waitingRet;
 
     //bool isServer = false;
     bool isMaster = false;
@@ -122,9 +143,10 @@ private:
 
     uint32_t generateTCPSegment(uint8_t **out, uint16_t srcPort, uint16_t dstPort,
                                uint32_t seqNum, uint32_t ackNum, uint8_t flag, uint16_t winSize,
-                               uint8_t *data, uint32_t dataLength);
+                               const uint8_t *data, uint32_t dataLength);
     Packet *generateTCPPacket(int32_t srcIP, int32_t dstIP, const uint8_t *segment, uint32_t segmentLength);
-    Packet *generateReplyACK(int32_t srcIP, int32_t dstIP, uint16_t seq, TCPSegment tcp, uint32_t dataLength);
+    Packet *generateReplyACK(int32_t srcIP, int32_t dstIP, uint32_t seq, TCPSegment tcp, uint16_t newWinSize);
+    Packet *generateReplyDataACK(int32_t srcIP, int32_t dstIP, uint32_t ack, TCPSegment tcp, uint16_t newWinSize);
     int implicitBind(int pid, int sockfd, uint32_t dstIP);
     Socket *dupSocket(const Socket *orig);
     void finalizeServerEstablish(Socket *m, Socket *socket);
@@ -152,6 +174,9 @@ protected:
     virtual int syscall_getpeername(int pid, int sockfd, SA *addr, socklen_t *addrlen);
     virtual int syscall_listen(int pid, int sockfd, int backlog);
     virtual int syscall_accept(UUID syscallUUID, int pid, int sockfd, SA *addr, socklen_t *addrlen);
+
+    // KENS LAB 3
+    virtual int syscall_write(UUID syscallUUID, int pid, int sockfd, const void *buf, size_t count);
 };
 
 class TCPAssignmentProvider
