@@ -99,8 +99,8 @@ typedef struct _Socket
     SA *waitingSA;
     socklen_t *waitingSocklen;
     uint8_t *waitingBuf;
-    uint8_t waitingCnt;
-    uint8_t waitingRemain;
+    uint32_t waitingCnt;
+    uint32_t waitingRemain;
     uint16_t waitingRet;
 
     //bool isServer = false;
@@ -146,7 +146,7 @@ private:
                                const uint8_t *data, uint32_t dataLength);
     Packet *generateTCPPacket(int32_t srcIP, int32_t dstIP, const uint8_t *segment, uint32_t segmentLength);
     Packet *generateReplyACK(int32_t srcIP, int32_t dstIP, uint32_t seq, TCPSegment tcp, uint16_t newWinSize);
-    Packet *generateReplyDataACK(int32_t srcIP, int32_t dstIP, uint32_t ack, TCPSegment tcp, uint16_t newWinSize);
+    Packet *generateReplyDataACK(int32_t srcIP, int32_t dstIP, uint32_t seq, uint32_t ack, TCPSegment tcp, uint16_t newWinSize);
     int implicitBind(int pid, int sockfd, uint32_t dstIP);
     Socket *dupSocket(const Socket *orig);
     void finalizeServerEstablish(Socket *m, Socket *socket);
@@ -177,6 +177,8 @@ protected:
 
     // KENS LAB 3
     virtual int syscall_write(UUID syscallUUID, int pid, int sockfd, const void *buf, size_t count);
+    virtual int syscall_read(UUID syscallUUID, int pid, int sockfd, void *buf, size_t count);
+
 };
 
 class TCPAssignmentProvider
