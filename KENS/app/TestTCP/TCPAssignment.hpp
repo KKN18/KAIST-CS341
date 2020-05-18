@@ -65,10 +65,16 @@ typedef struct _SockBuf {
 } SocketBuffer;
 
 typedef struct _SockDataBuf {
-    uint32_t seq;
+    int32_t seq;
     uint16_t len;
     uint16_t offset;
     uint8_t *buf;
+    bool acked = false;
+
+    bool operator  <(const _SockDataBuf& x) const
+    {
+        return seq < x.seq;
+    }
 } SocketDataBuffer;
 
 typedef struct _Socket
@@ -93,7 +99,12 @@ typedef struct _Socket
     uint16_t winSize = TCP_WIN_SIZE;
     uint16_t remoteWinSize = TCP_WIN_SIZE;
     std::list<SocketBuffer *> sendBuf;
-    std::list<SocketDataBuffer *> localBuf;
+    std::set<SocketDataBuffer *> localBuf;
+    uint32_t nextAck;
+
+    //For fast-retransmission
+    uint32_t lastAck = 0;
+    uint32_t lastAckCnt = 0;
 
     uint16_t szSendBuf = 0;
     uint16_t szLocalBuf = 0;
