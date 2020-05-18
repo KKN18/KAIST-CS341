@@ -28,7 +28,7 @@
 #define TCP_WIN_SIZE 51200
 #define TCP_DATA_MAX 512
 
-#define DEFAULT_TIMEOUT 120
+#define DEFAULT_TIMEOUT 1
 #define TCP_MSL 60
 
 namespace E
@@ -61,6 +61,7 @@ typedef struct _SockBuf {
     Packet *pkt;
     struct _Socket *socket;
     UUID timerUUID;
+    TcpState state;
 } SocketBuffer;
 
 typedef struct _SockDataBuf {
