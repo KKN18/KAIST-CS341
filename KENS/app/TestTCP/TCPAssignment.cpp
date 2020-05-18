@@ -134,20 +134,21 @@ void TCPAssignment::packetArrived(std::string fromModule, Packet* packet)
     bool isFIN = tcp.flag & TCP_FLAG_FIN;
     bool isACK = tcp.flag & TCP_FLAG_ACK;
 
-
-    /*printf("\nSYN ACK FIN : %d %d %d\n", isSYN, isACK, isFIN);
-    printf("%d %d %d %d\n", ntohs(tcp.srcPort), ntohs(tcp.dstPort), ntohl(tcp.seqNum), ntohl(tcp.ackNum));
+    /*printf("\n\n");
+    printf("SYN ACK FIN : %d %d %d\n", isSYN, isACK, isFIN);
+    printf("%d %d %d %d\n", tcp.srcPort, tcp.dstPort, ntohl(tcp.seqNum), ntohl(tcp.ackNum));
     printf("%d %d\n\n", srcIP, dstIP);/**/
     Socket *t = this->findSocketByLocalIP(dstIP, tcp.dstPort);
     //resolve master sockets
     Socket *r = this->findSocketByRemoteIP(srcIP, tcp.srcPort);
     Socket *m;
-
     if(t == NULL) {
         t = findSocketByLocalIP(0, tcp.dstPort); //INADDR_ANY
         if(t == NULL) {
             this->freePacket(packet);
-            if(tcp.data != NULL) delete[] tcp.data;
+            if(tcp.data != NULL) {
+                delete[] tcp.data;
+            }
             return;
         }
         if(t != NULL) t->localAddr = Addr_t(dstIP, tcp.dstPort);
@@ -168,9 +169,55 @@ void TCPAssignment::packetArrived(std::string fromModule, Packet* packet)
             return;
         }
     }
+    //dumpSocket(t);
 
+    //Firstly check wheter ackNum is proper,
+    bool proper = false;
+    bool isRecv = false;
+
+
+    if(ntohl(tcp.ackNum) == t->seqNum) //data receiver side
+        proper = isRecv = true;
+    
+    if (isACK) { //data sender side
+        //find if there is unacked packet in local buffer
+        for(auto iter = t->sendBuf.begin(); iter != t->sendBuf.end(); iter++) {
+            SocketBuffer *sb = (SocketBuffer *)(*iter);
+            //printf("sb seq, len : %d %d\n", sb->seq, sb->len);
+            if(ntohl(tcp.ackNum) == sb->seq + sb->len) { 
+                //if find
+                t->sendBuf.erase(iter);
+                t->szSendBuf -= sb->len;
+                proper = true;
+                
+                this->cancelTimer(sb->timerUUID);
+                this->freePacket(sb->pkt);
+                sb->socket = NULL;
+                delete sb;
+                
+                if(!isRecv && t->isSyscallWaiting) {
+                    this->returnSystemCall(t->waitingSyscall, t->waitingRet);
+                    t->isSyscallWaiting = false;
+                }
+                break;   
+            }
+        }
+    }
+    //simultaneous cases
+    if(isFIN && isACK && t->state == TcpState::FINWAIT_1) {
+        proper = true;
+    }
+    if(isSYN && t->state == TcpState::SYNSENT) {
+        proper = true;
+    }
+
+    if(!proper) { 
+        //ignore improper ACK
+        this->freePacket(packet);
+        if(tcp.data != NULL) delete[] tcp.data;
+        return;
+    }
     //this->dumpSocket(t);
-
     if(isSYN) {
         if(t->state == TcpState::LISTEN) {
             //if exceed backlog limit
@@ -193,7 +240,7 @@ void TCPAssignment::packetArrived(std::string fromModule, Packet* packet)
             //send SYNACK
 
             Packet *reply = generateReplyACK(srcIP, dstIP, newSocket->seqNum++, tcp, t->winSize);
-            this->sendPacket("IPv4", reply);
+            sendPacketAndQueue(newSocket, reply, 0);
             newSocket->ackNum = ntohl(tcp.seqNum)+1;
         }
         else if(t->state == TcpState::SYNSENT) {
@@ -211,6 +258,7 @@ void TCPAssignment::packetArrived(std::string fromModule, Packet* packet)
                 tcp.flag = 0;
                 Packet *reply = generateReplyACK(srcIP, dstIP, t->seqNum, tcp, t->winSize);
                 this->sendPacket("IPv4", reply);
+
                 t->ackNum = ntohl(tcp.seqNum)+1;
 
                 if(t->isSyscallWaiting) {
@@ -220,8 +268,9 @@ void TCPAssignment::packetArrived(std::string fromModule, Packet* packet)
             }
             else if(!isACK && Addr_t(srcIP, tcp.srcPort) == t->remoteAddr) {
                 //Simultaneous open, which is SYN and (recieved.src == current.dst)
-                Packet *reply = generateReplyACK(srcIP, dstIP, t->seqNum, tcp, t->winSize);
-                this->sendPacket("IPv4", reply);
+                printf("suck");
+                Packet *reply = generateReplyACK(srcIP, dstIP, t->seqNum - 1 , tcp, t->winSize);
+                sendPacketAndQueue(t, reply, 0);
                 t->ackNum = ntohl(tcp.seqNum)+1;
                 t->state = TcpState::SYNRCVD;
             }
@@ -245,17 +294,18 @@ void TCPAssignment::packetArrived(std::string fromModule, Packet* packet)
         }
     }
     else if (isFIN && isACK) {
-        /*if(ntohl(tcp.ackNum) != t->seqNum) { 
+        /* if(ntohl(tcp.ackNum) != t->seqNum) { 
             //ignore not proper ACK            
             this->freePacket(packet);
             if(tcp.data != NULL) delete[] tcp.data;
             return;
-        }*/
+        } */
         if(t->state == TcpState::ESTAB) {
             t->state = TcpState::CLOSE_WAIT;
             tcp.flag = 0;
             Packet *reply = generateReplyACK(srcIP, dstIP, t->seqNum, tcp, t->winSize);
-            this->sendPacket("IPv4", reply); 
+            printf("fuck-1\n");
+            this->sendPacket("IPv4", reply);
             t->ackNum = ntohl(tcp.seqNum)+1;
         }
         else if(t->state == TcpState::FINWAIT_1) {
@@ -263,6 +313,7 @@ void TCPAssignment::packetArrived(std::string fromModule, Packet* packet)
             t->state = TcpState::CLOSING;
             tcp.flag = 0;
             Packet *reply = generateReplyACK(srcIP, dstIP, t->seqNum, tcp, t->winSize);
+            printf("fuck0\n");
             this->sendPacket("IPv4", reply);
             t->ackNum = ntohl(tcp.seqNum)+1;
         }
@@ -270,59 +321,30 @@ void TCPAssignment::packetArrived(std::string fromModule, Packet* packet)
             t->state = TcpState::TIMED_WAIT;
             tcp.flag = 0;
             Packet *reply = generateReplyACK(srcIP, dstIP, t->seqNum, tcp, t->winSize);
-            this->sendPacket("IPv4", reply);
+            printf("fuck1\n");
+            this->sendPacketAndQueue(t, reply, 0, 2 * TCP_MSL);
             t->ackNum = ntohl(tcp.seqNum)+1;
-            t->timerUUID = this->addTimer(t, TimeUtil::makeTime(2 * TCP_MSL,TimeUtil::SEC));
-
         }
         else if(t->state == TcpState::TIMED_WAIT) {
             tcp.flag = 0;
-            Packet * reply = generateReplyACK(srcIP, dstIP, t->seqNum, tcp, t->winSize);
-            this->sendPacket("IPv4", reply);
-            t->ackNum = ntohl(tcp.seqNum)+1;
-
-            this->cancelTimer(t->timerUUID);
-            t->timerUUID = this->addTimer(t, TimeUtil::makeTime(2 * TCP_MSL,TimeUtil::SEC));
+            for(auto iter = t->sendBuf.begin(); iter != t->sendBuf.end(); iter++) {
+                SocketBuffer *sb = (SocketBuffer *)(*iter);
+                //printf("sb seq, len : %d %d\n", sb->seq, sb->len);
+                if(sb->socket->state == TcpState::TIMED_WAIT) { 
+                    this->cancelTimer(sb->timerUUID);
+                    Packet *tmp = this->clonePacket(sb->pkt);
+            printf("fuckn\n");
+                    this->sendPacket("IPv4", tmp);
+                    sb->timerUUID = this->addTimer(sb, TimeUtil::makeTime(2 * TCP_MSL, TimeUtil::SEC));
+                    break;   
+                }
+            }
         }
     }
     else if(isACK) {
         //printf("ack dumped for tcp ack %d (which seq : %d)\n", ntohl(tcp.ackNum), t->seqNum);
         //this->dumpSocket(t);
 
-        //Firstly check wheter ackNum is proper,
-        bool proper = false;
-        bool isRecv = false;
-        if(ntohl(tcp.ackNum) == t->seqNum) //data receiver side
-            proper = isRecv = true;
-        else { //data sender side
-            //find if there is unacked packet in local buffer
-            for(auto iter = t->sendBuf.begin(); iter != t->sendBuf.end(); iter++) {
-                SocketBuffer *sb = (SocketBuffer *)(*iter);
-    
-                if(ntohl(tcp.ackNum) == sb->seq + sb->len) { 
-                    //if find
-                    t->sendBuf.erase(iter);
-                    t->szSendBuf -= sb->len;
-                    proper = true;
-                    
-                    delete[] sb->buf;
-                    delete sb;
-                    
-                    if(t->isSyscallWaiting) {
-                        this->returnSystemCall(t->waitingSyscall, t->waitingRet);
-                        t->isSyscallWaiting = false;
-                    }
-                    break;   
-                }
-            }
-        }
-
-        if(!proper) { 
-            //ignore improper ACK            
-            this->freePacket(packet);
-            if(tcp.data != NULL) delete[] tcp.data;
-            return;
-        }
         if(t->state == TcpState::SYNRCVD) {
             //If before ESTABLISHED, handle it
             t->state = TcpState::ESTAB;
@@ -344,13 +366,18 @@ void TCPAssignment::packetArrived(std::string fromModule, Packet* packet)
             this->cleanSocket(t);
         }
         else if(t->state == TcpState::CLOSING) {
+            //Simultaneous closing
             t->state = TcpState::TIMED_WAIT;
-            t->timerUUID = this->addTimer(t, TimeUtil::makeTime(2 * TCP_MSL,TimeUtil::SEC));
+            SocketBuffer *sb = new SocketBuffer;
+            sb->socket = t;
+            sb->pkt = NULL;
+            sb->timerUUID = this->addTimer(sb, TimeUtil::makeTime(2 * TCP_MSL, TimeUtil::SEC));
+            //t->timerUUID = this->addTimer(t, TimeUtil::makeTime(2 * TCP_MSL,TimeUtil::SEC));
         }
         else if(t->state == TcpState::ESTAB && isRecv && len > 40) {
             //TODO : out of order arrival
             //if data received,
-            SocketBuffer *res = new SocketBuffer;
+            SocketDataBuffer *res = new SocketDataBuffer;
             res->seq = tcp.seqNum;
             res->len = len - 40; // remove of IP+TCP header size
             res->buf = new uint8_t[len - 40];
@@ -395,11 +422,24 @@ void TCPAssignment::packetArrived(std::string fromModule, Packet* packet)
 
 void TCPAssignment::timerCallback(void* payload)
 {
-    Socket *t = (Socket *)payload;
-    if(t->state == TcpState::TIMED_WAIT) {
-        t->state = TcpState::CLOSED;
-        this->cleanSocket(t);
+    SocketBuffer *sb = (SocketBuffer *)payload;
+
+    //-Socket(sb->socket);
+    if(sb->socket->state == TcpState::TIMED_WAIT) {
+        sb->socket->state = TcpState::CLOSED;
+        if(sb->pkt != NULL)
+            this->freePacket(sb->pkt);
+        this->cleanSocket(sb->socket);
+        sb->socket = NULL;
+        delete sb;
+        return;
     }
+
+    printf("shit\n");
+
+    Packet *tmp = this->clonePacket(sb->pkt);
+    this->sendPacket("IPv4", tmp);
+    sb->timerUUID = this->addTimer(sb, TimeUtil::makeTime(DEFAULT_TIMEOUT, TimeUtil::SEC));
 }
 
 /* Helper functions */
@@ -577,12 +617,12 @@ void TCPAssignment::finalizeServerEstablish(Socket *m, Socket *est)
     output->sin_addr.s_addr = est->remoteAddr.first;
     memset(&output->sin_zero, 0, 8);
     *outputLen = sizeof(SA_in);
-
-    /*printf("--------syscall returned------\n");
+/*
+    printf("--------syscall returned------\n");
     printf("ret : %d\n", connfd);
     this->dumpSocket(est);
-    printf("---------syscall returned-----\n\n"); */
-
+    printf("---------syscall returned-----\n\n");
+/**/
     this->returnSystemCall(m->waitingSyscall, connfd);
     m->isSyscallWaiting = false;
     m->waitingSA = NULL;
@@ -605,7 +645,7 @@ void TCPAssignment::cleanSocket(Socket *t)
 {
     auto t1 = Desc_t(t->pid, t->fd);
 	this->Sockets.erase(t1);
-	if(this->localSockets.count(t->localAddr))
+	if(t->isMaster && this->localSockets.count(t->localAddr))
 		this->localSockets.erase(t->localAddr);
 
     if(this->remoteSockets.count(t->remoteAddr) != 0)
@@ -613,6 +653,18 @@ void TCPAssignment::cleanSocket(Socket *t)
 
 	removeFileDescriptor(t->pid, t->fd);
 	delete t;
+}
+
+void TCPAssignment::sendPacketAndQueue(Socket *t, Packet *pkt, uint16_t len, uint16_t timeout) {
+    SocketBuffer *buf_packet = new SocketBuffer;
+    buf_packet->seq = t->seqNum;
+    buf_packet->len = len;
+    buf_packet->pkt = this->clonePacket(pkt);
+    buf_packet->socket = t;
+    buf_packet->timerUUID = this->addTimer(buf_packet, TimeUtil::makeTime(timeout, TimeUtil::SEC));
+    this->sendPacket("IPv4", pkt);
+    t->sendBuf.push_back(buf_packet);
+    printf("hihi zzzz %d\n", timeout);
 }
 
 //KENS LAB 1
@@ -639,9 +691,9 @@ int TCPAssignment::syscall_socket(int pid, int type, int protocol)
 int TCPAssignment::syscall_close(int pid, int sockfd)
 {
 	Socket *t = this->getSocketByDescriptor(pid, sockfd);
+
 	if(t == NULL)
 		return -1;
-
     //Lab 2-2 Start
     //Send FIN here
     if(t->state == ESTAB || t->state == CLOSE_WAIT) {
@@ -652,23 +704,23 @@ int TCPAssignment::syscall_close(int pid, int sockfd)
                                         NULL, 0);
         Packet *packet = this->generateTCPPacket(t->localAddr.first, t->remoteAddr.first,
                                             fin, sz);
-        this->sendPacket("IPv4", packet);
 
-        SocketBuffer *buf_packet = new SocketBuffer;
-        buf_packet->seq = t->seqNum++;
-        buf_packet->len = -1;
-        buf_packet->offset = 0;
-        buf_packet->buf = new uint8_t[sz]; //Save TCP Segment here
-        memcpy(buf_packet->buf, fin, sz);
-        t->sendBuf.push_back(buf_packet);
+        t->seqNum++;
+        printf("suck\n");
+        sendPacketAndQueue(t, packet, 0, DEFAULT_TIMEOUT);
         delete[] fin;
     }
+
     if(t->state == ESTAB) {
+        printf("Have been FINWAIT1");
         t->state = TcpState::FINWAIT_1;
     }
     else if(t->state == CLOSE_WAIT) {
         t->state = TcpState::LAST_ACK;
-    }    
+    } 
+    else if(t->state == CLOSED) {
+        this->cleanSocket(t);
+    }  
     return 0;
 }
 
@@ -771,7 +823,10 @@ int TCPAssignment::syscall_connect(UUID syscallUUID, int pid, int sockfd, SA *ad
                                           syn, sz);
     
     delete[] syn;
-    this->sendPacket("IPv4", packet);
+
+    printf("shit2\n");
+    sendPacketAndQueue(t, packet, 0);
+
     t->state = TcpState::SYNSENT;
     t->remoteAddr = Addr_t(sa->sin_addr.s_addr, sa->sin_port);
     this->remoteSockets[t->remoteAddr] = t;
@@ -846,15 +901,9 @@ int TCPAssignment::syscall_write(UUID syscallUUID, int pid, int sockfd, const vo
                                                static_cast<const uint8_t *>(buf)+i, real_len);
         Packet *packet = this->generateTCPPacket(t->localAddr.first, t->remoteAddr.first, data, sz);
         
-        this->sendPacket("IPv4", packet);
-        
-        SocketBuffer *buf_packet = new SocketBuffer;
-        buf_packet->seq = t->seqNum;
-        buf_packet->len = real_len;
-        buf_packet->offset = 0;
-        buf_packet->buf = new uint8_t[sz]; //Save TCP Segment here
-        memcpy(buf_packet->buf, data, sz);
-        t->sendBuf.push_back(buf_packet);
+    printf("shit3\n");
+        sendPacketAndQueue(t, packet, real_len);
+
         t->seqNum += real_len;
         t->szSendBuf += real_len;
 
@@ -881,7 +930,7 @@ int TCPAssignment::syscall_read(UUID syscallUUID, int pid, int sockfd, void *buf
     size_t remain = count;
     int buf_offset = 0;
     while(remain > 0 && !t->localBuf.empty()) {
-        SocketBuffer *first = t->localBuf.front();
+        SocketDataBuffer *first = t->localBuf.front();
         int avail_len = first->len - first->offset;
         if (avail_len <= (int)remain) {
             memcpy(&copy_buf[buf_offset], &first->buf[first->offset], avail_len);

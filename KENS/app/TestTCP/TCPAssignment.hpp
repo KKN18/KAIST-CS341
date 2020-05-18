@@ -28,6 +28,7 @@
 #define TCP_WIN_SIZE 51200
 #define TCP_DATA_MAX 512
 
+#define DEFAULT_TIMEOUT 120
 #define TCP_MSL 60
 
 namespace E
@@ -57,9 +58,17 @@ typedef struct sockaddr_in SA_in;
 typedef struct _SockBuf {
     uint32_t seq;
     uint16_t len;
+    Packet *pkt;
+    struct _Socket *socket;
+    UUID timerUUID;
+} SocketBuffer;
+
+typedef struct _SockDataBuf {
+    uint32_t seq;
+    uint16_t len;
     uint16_t offset;
     uint8_t *buf;
-} SocketBuffer;
+} SocketDataBuffer;
 
 typedef struct _Socket
 {
@@ -83,7 +92,7 @@ typedef struct _Socket
     uint16_t winSize = TCP_WIN_SIZE;
     uint16_t remoteWinSize = TCP_WIN_SIZE;
     std::list<SocketBuffer *> sendBuf;
-    std::list<SocketBuffer *> localBuf;
+    std::list<SocketDataBuffer *> localBuf;
 
     uint16_t szSendBuf = 0;
     uint16_t szLocalBuf = 0;
@@ -110,6 +119,7 @@ typedef struct _Socket
     //Timer
     UUID timerUUID;    
 } Socket;
+
 
 typedef struct _TCP {
     uint16_t srcPort;
@@ -152,6 +162,7 @@ private:
     void finalizeServerEstablish(Socket *m, Socket *socket);
     void dumpSocket(const Socket *s);
     void cleanSocket(Socket *);
+    void sendPacketAndQueue(Socket *t, Packet *pkt, uint16_t len, uint16_t timeout = DEFAULT_TIMEOUT);
     
 public:
 	TCPAssignment(Host* host);
