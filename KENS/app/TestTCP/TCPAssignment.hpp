@@ -17,6 +17,7 @@
 #include <netinet/in.h>
 #include <list>
 #include <queue>
+#include <set>
 #include <map>
 #include <utility>
 
@@ -28,8 +29,8 @@
 #define TCP_WIN_SIZE 51200
 #define TCP_DATA_MAX 512
 
-#define DEFAULT_TIMEOUT 1
-#define TCP_MSL 60
+#define DEFAULT_TIMEOUT 100
+#define TCP_MSL 60000
 
 namespace E
 {
@@ -71,11 +72,13 @@ typedef struct _SockDataBuf {
     uint8_t *buf;
     bool acked = false;
 
-    bool operator  <(const _SockDataBuf& x) const
-    {
-        return seq < x.seq;
-    }
 } SocketDataBuffer;
+
+struct Cmp{
+    bool operator()(const SocketDataBuffer *x, const SocketDataBuffer *y) const {
+        return x->seq < y->seq;
+    }
+};
 
 typedef struct _Socket
 {
@@ -89,7 +92,7 @@ typedef struct _Socket
 
     //Socket Essentials
     Addr_t localAddr;
-	Addr_t remoteAddr;
+	Addr_t remoteAddr = Addr_t(-1, -1);
     TcpState state = TcpState::CLOSED;
 
     uint32_t seqNum = 0;
@@ -99,7 +102,7 @@ typedef struct _Socket
     uint16_t winSize = TCP_WIN_SIZE;
     uint16_t remoteWinSize = TCP_WIN_SIZE;
     std::list<SocketBuffer *> sendBuf;
-    std::set<SocketDataBuffer *> localBuf;
+    std::set<SocketDataBuffer *, Cmp> localBuf;
     uint32_t nextAck;
 
     //For fast-retransmission
@@ -127,6 +130,8 @@ typedef struct _Socket
     //bool isServer = false;
     bool isMaster = false;
     bool isBound;
+
+    bool isProcessingData = false;
 
     //Timer
     UUID timerUUID;    
@@ -162,7 +167,7 @@ private:
 	Socket *getSocketByDescriptor(int pid, int fd);
 	Socket *findSocketByLocalIP(uint32_t ip, int port);
 	Socket *findSocketByRemoteIP(uint32_t ip, int port);
-
+    uint16_t calculateTCPChecksum(int32_t, int32_t, TCPSegment, uint32_t);
     uint32_t generateTCPSegment(uint8_t **out, uint16_t srcPort, uint16_t dstPort,
                                uint32_t seqNum, uint32_t ackNum, uint8_t flag, uint16_t winSize,
                                const uint8_t *data, uint32_t dataLength);
@@ -174,7 +179,7 @@ private:
     void finalizeServerEstablish(Socket *m, Socket *socket);
     void dumpSocket(const Socket *s);
     void cleanSocket(Socket *);
-    void sendPacketAndQueue(Socket *t, Packet *pkt, uint16_t len, uint16_t timeout = DEFAULT_TIMEOUT);
+    void sendPacketAndQueue(Socket *t, Packet *pkt, uint16_t len, uint32_t timeout = DEFAULT_TIMEOUT);
     
 public:
 	TCPAssignment(Host* host);

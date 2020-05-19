@@ -154,7 +154,7 @@ protected:
 		free(recv_buffer);
 
 		EXPECT_EQ(expect_size, total_size);
-
+		
 		close(client_fd);
 		close(server_socket);
 	}
