@@ -1,5 +1,5 @@
 PROGRAM= testTCP
-EXTRA_CXXFLAGS+= -std=gnu++11
+EXTRA_CXXFLAGS+= -std=gnu++11 #-fsanitize=address -lasan
 EXTRA_LIBS+= -lgtest -lgtest_main
 include ../../mk/find_tcp_solution.mk
 

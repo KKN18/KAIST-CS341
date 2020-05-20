@@ -18,6 +18,8 @@
 #include <E/E_TimeUtil.hpp>
 #include "TCPAssignment.hpp"
 
+#define SYSCALL_DEBUG 0
+
 namespace E
 {
 
@@ -42,6 +44,31 @@ void TCPAssignment::initialize()
 
 void TCPAssignment::finalize()
 {
+/*    std::set<Socket *> st;
+
+    //Clear sockets first
+    for(auto it = this->Sockets.begin(); it != this->Sockets.end(); it++) {
+        Socket *t = it->second;
+        t->backlogs.clear();
+        t->established.clear();
+        st.insert((Socket *)it->second);
+    }
+
+    //And other remain sockets
+    for(auto it = this->localSockets.begin(); it != this->localSockets.end(); it++) {
+        Socket *t = it->second;
+        t->backlogs.clear();
+        t->established.clear();
+        st.insert((Socket *)it->second);
+    }
+    for(auto it = this->remoteSockets.begin(); it != this->remoteSockets.end(); it++) { 
+        Socket *t = it->second;
+        t->backlogs.clear();
+        t->established.clear();
+        st.insert((Socket *)it->second);
+    }
+    for(auto it = st.begin(); it != st.end(); it++)
+        delete *it;*/
 
 }
 
@@ -151,7 +178,7 @@ void TCPAssignment::packetArrived(std::string fromModule, Packet* packet)
     Socket *m = NULL;
 
     
-    /* printf("\n\n");
+    /*printf("\n\n");
     printf("SYN ACK FIN : %d %d %d\n", isSYN, isACK, isFIN);
     printf("%d %d %d %d\n", tcp.srcPort, tcp.dstPort, ntohl(tcp.seqNum), ntohl(tcp.ackNum));
     printf("%d %d %d\n", srcIP, dstIP, len);//*/
@@ -183,23 +210,51 @@ void TCPAssignment::packetArrived(std::string fromModule, Packet* packet)
             return;
         }
     }
-    /*if(t->state != 6) {
-     printf("\n\n");
+    t->remoteWinSize = ntohs(tcp.winSize);
+    /*printf("\n\n");
     printf("SYN ACK FIN : %d %d %d\n", isSYN, isACK, isFIN);
     printf("%d %d %d %d\n", tcp.srcPort, tcp.dstPort, ntohl(tcp.seqNum), ntohl(tcp.ackNum));
-    printf("%d %d\n\n", srcIP, dstIP);*/
-    //}
-
+    printf("%d\n", t->seqNum);*/
+    
     //Firstly check wheter ackNum is proper,
     bool proper = false;
-    bool isRecv = false;
+    bool isRecv = len > 40;
 
     //dumpSocket(t);
     if(ntohl(tcp.ackNum) == t->seqNum) //data receiver side
-        proper = isRecv = true;
+        proper = true;
     //printf("packet received~\n");
     
-    if (isFIN && (t->state < TcpState::ESTAB || (t->state == TcpState::ESTAB &&
+
+    if(isFIN) {
+        if(t->state < TcpState::ESTAB) {
+            //If before establish
+            this->freePacket(packet);
+            assert(tcp.data == NULL);
+            return;
+        }
+        else if(t->state == TcpState::ESTAB) {
+            if(t->nextAck != ntohl(tcp.seqNum)) {
+                //If wrong sequence number, (there is missing packets before)
+                //then ignore FIN packet
+                this->freePacket(packet);
+                assert(tcp.data == NULL);
+                return;
+            }
+            else if(isRecv) {
+                //If it's data receiver side
+                t->getEOF = true;
+                if(t->isSyscallWaiting && t->waitingSyscallType == READ) {
+                    this->returnSystemCall(t->waitingSyscall, 0);
+                    t->isSyscallWaiting = false;
+                }
+                this->freePacket(packet);
+                assert(tcp.data == NULL);
+                return;
+            }
+        }
+    }
+    /*if (isFIN && (t->state < TcpState::ESTAB || (t->state == TcpState::ESTAB &&
                     (t->nextAck != ntohl(tcp.seqNum) || t->isSyscallWaiting)))) {
         //ignore FIN while processing data transmissions
         this->freePacket(packet);
@@ -207,21 +262,33 @@ void TCPAssignment::packetArrived(std::string fromModule, Packet* packet)
             delete[] tcp.data;
         }
 
-        if(t->isSyscallWaiting && t->localBuf.size() != 0 && t->state >= TcpState::ESTAB) {
+        printf("nextAck, seq : %d %d\n", t->nextAck, ntohl(tcp.seqNum));
+        if(t->nextAck != ntohl(tcp.seqNum) && t->state >= TcpState::ESTAB) {
+            //When
             //data out!
-            //printf("syscall returned");
+            if(SYSCALL_DEBUG) printf("Syscall returned! - pos1\n");
+            assert(t->waitingSyscallType == READ);
+            this->returnSystemCall(t->waitingSyscall, 0);
+            t->isSyscallWaiting = false;
+            return;
+        }
+        else if(t->isSyscallWaiting && t->state >= TcpState::ESTAB) {
+            //EOF case
+            if(SYSCALL_DEBUG) printf("Syscall returned! - pos2\n");
+            assert(t->waitingSyscallType == READ);
+            this->returnSystemCall(t->waitingSyscall, -1);
+            t->isSyscallWaiting = false;
+            proper = true;
+        }
+        /*else if(t->isSyscallWaiting && t->state == TcpState::ESTAB) {
             this->returnSystemCall(t->waitingSyscall, 0);
             t->isSyscallWaiting = false;
         }
-        else if(t->isSyscallWaiting && t->state >= TcpState::ESTAB) {
-            this->returnSystemCall(t->waitingSyscall, -1);
-            t->isSyscallWaiting = false;
+        else {
+            return;
         }
-    
-        return;
-    }
-
-    if (isACK) { //data sender side
+    }*/
+    else if (isACK) { //data sender side
         //bool isFound = false;
         //find if there is unacked packet in local buffer
         for(auto iter = t->sendBuf.begin(); iter != t->sendBuf.end();) {
@@ -239,23 +306,29 @@ void TCPAssignment::packetArrived(std::string fromModule, Packet* packet)
                 
                 this->cancelTimer(sb->timerUUID);
                 this->freePacket(sb->pkt);
+                sb->pkt = NULL;
                 sb->socket = NULL;
+                TcpState tmp = sb->state;
                 delete sb;
+
+                    //printf("hi2 %d %d\n", isRecv, t->isSyscallWaiting);
                 
-                if(!isRecv && t->isSyscallWaiting) {
+                if(t->waitingSyscallType == WRITE && t->isSyscallWaiting) {
+                    if(SYSCALL_DEBUG) printf("Syscall returned! - pos3\n");
                     this->returnSystemCall(t->waitingSyscall, t->waitingRet);
                     t->isSyscallWaiting = false;
                     break;
                 }
-                if(sb->state != TcpState::ESTAB)
-                    break;   
+                if((tmp != TcpState::ESTAB) || (!isFIN && tmp != TcpState::FINWAIT_2))
+                    break;
             }
-            else if(sb->state == TcpState::ESTAB && ntohl(tcp.ackNum) >= sb->seq + sb->len) {
+            else if((sb->state == TcpState::ESTAB || (!isFIN && sb->state != TcpState::FINWAIT_2)) && ntohl(tcp.ackNum) >= sb->seq + sb->len) {
                 iter = t->sendBuf.erase(iter);
                 t->szSendBuf -= sb->len;
 
                 this->cancelTimer(sb->timerUUID);
                 this->freePacket(sb->pkt);
+                sb->pkt = NULL;
                 sb->socket = NULL;
                 delete sb;
             }
@@ -285,6 +358,7 @@ void TCPAssignment::packetArrived(std::string fromModule, Packet* packet)
             }
         }*/
     }
+
     //simultaneous cases
     if(isFIN && isACK && t->state == TcpState::FINWAIT_1) {
         proper = true;
@@ -318,11 +392,9 @@ void TCPAssignment::packetArrived(std::string fromModule, Packet* packet)
     /*else if(isFIN && isACK && t->state == TcpState::SYNRCVD && proper) {
         t->state = TcpState::ESTAB;
         if(t->isSyscallWaiting) {
-        printf("fuck2 fuck fuck fuck\n");
             this->returnSystemCall(t->waitingSyscall, 0);
             t->isSyscallWaiting = false;
         }
-        printf("fuck fuck fuck fuck\n");
     }*/
     
 
@@ -359,16 +431,21 @@ void TCPAssignment::packetArrived(std::string fromModule, Packet* packet)
             sendPacketAndQueue(newSocket, reply, 0);
             newSocket->ackNum = ntohl(tcp.seqNum)+1;
             //In here, if SYN (from SYNSENT) is in buffer, we have to clear it
-            for(auto iter = newSocket->sendBuf.begin(); iter != newSocket->sendBuf.end(); iter++) {
+            
+              printf("segfault 4\n");
+            for(auto iter = newSocket->sendBuf.begin(); iter != newSocket->sendBuf.end();) {
                 SocketBuffer *sb = (SocketBuffer *)(*iter);
                 if(sb->state == TcpState::SYNSENT) {
                     this->cancelTimer(sb->timerUUID);
                     this->freePacket(sb->pkt);
                     sb->socket = NULL;
-                    newSocket->sendBuf.erase(iter);
+                    iter = newSocket->sendBuf.erase(iter);
                     delete sb;
                     break;
                 }
+                else
+                    iter++;
+                
             }
 
         }
@@ -399,16 +476,21 @@ void TCPAssignment::packetArrived(std::string fromModule, Packet* packet)
             else if(!isACK && Addr_t(srcIP, tcp.srcPort) == t->remoteAddr) {
                 //simultaneous open, which is SYN and (recieved.src == current.dst)
                 Packet *reply = generateReplyACK(srcIP, dstIP, t->seqNum - 1 , tcp, t->winSize);
+                
+            printf("segfault 5\n");
                 for(auto iter = t->sendBuf.begin(); iter != t->sendBuf.end(); iter++) {
                     SocketBuffer *sb = (SocketBuffer *)(*iter);
                     if(sb->state == TcpState::SYNSENT) {
                         this->cancelTimer(sb->timerUUID);
                         this->freePacket(sb->pkt);
+                sb->pkt = NULL;
                         sb->socket = NULL;
-                        t->sendBuf.erase(iter);
+                        iter = t->sendBuf.erase(iter);
                         delete sb;
-                        break;
                     }
+                    else
+                        iter++;
+                    
                 }
 
 
@@ -431,6 +513,7 @@ void TCPAssignment::packetArrived(std::string fromModule, Packet* packet)
             t->state = ESTAB;
             t->nextAck = ntohl(tcp.seqNum);
             if(t->isSyscallWaiting) {
+            if(SYSCALL_DEBUG) printf("Syscall returned! - pos5\n");
                 this->returnSystemCall(t->waitingSyscall, 0);
                 t->isSyscallWaiting = false;
             }
@@ -469,16 +552,17 @@ void TCPAssignment::packetArrived(std::string fromModule, Packet* packet)
         }
         else if(t->state == TcpState::TIMED_WAIT) {
             tcp.flag = 0;
+            
+            printf("segfault 6\n");
             for(auto iter = t->sendBuf.begin(); iter != t->sendBuf.end(); iter++) {
                 SocketBuffer *sb = (SocketBuffer *)(*iter);
                 //printf("sb seq, len : %d %d\n", sb->seq, sb->len);
-                if(sb->socket->state == TcpState::TIMED_WAIT) { 
-                    this->cancelTimer(sb->timerUUID);
+                if(sb->socket->state== TcpState::TIMED_WAIT) { 
                     if(sb->pkt != NULL) {
                         Packet *tmp = this->clonePacket(sb->pkt);
                         this->sendPacket("IPv4", tmp);
+                        sb->timerUUID = this->addTimer(sb, TimeUtil::makeTime(2 * TCP_MSL, TimeUtil::MSEC));
                     }
-                    sb->timerUUID = this->addTimer(sb, TimeUtil::makeTime(2 * TCP_MSL, TimeUtil::MSEC));
                     break;   
                 }
             }
@@ -501,7 +585,7 @@ void TCPAssignment::packetArrived(std::string fromModule, Packet* packet)
                 finalizeServerEstablish(m, t);
             }
             else {
-                m->established.push(t);
+                m->established.insert(t);
             }
         }
         else if(t->state == TcpState::SYNRCVD)
@@ -510,6 +594,7 @@ void TCPAssignment::packetArrived(std::string fromModule, Packet* packet)
             t->ackNum = ntohl(tcp.seqNum);
             t->nextAck = t->ackNum;
             if(t->isSyscallWaiting) {
+            if(SYSCALL_DEBUG) printf("Syscall returned! - pos6\n");
                 this->returnSystemCall(t->waitingSyscall, 0);
                 t->isSyscallWaiting = false;
             }
@@ -533,7 +618,7 @@ void TCPAssignment::packetArrived(std::string fromModule, Packet* packet)
             t->sendBuf.push_back(sb);
             //t->timerUUID = this->addTimer(t, TimeUtil::makeTime(2 * TCP_MSL,TimeUtil::SEC));
         }
-        else if(t->state == TcpState::ESTAB && isRecv && len > 40) {
+        else if((t->state == TcpState::ESTAB || t->state == TcpState::FINWAIT_2) && isRecv && len > 40) {
             //TODO : out of order arrival
             //if data received,
             SocketDataBuffer *res = new SocketDataBuffer;
@@ -560,6 +645,9 @@ void TCPAssignment::packetArrived(std::string fromModule, Packet* packet)
                 this->sendPacket("IPv4", reply);
                 delete[] res->buf;
                 delete res;
+                
+                this->freePacket(packet);   
+                if(tcp.data != NULL) delete[] tcp.data;
                 return;
             }
 
@@ -590,6 +678,9 @@ void TCPAssignment::packetArrived(std::string fromModule, Packet* packet)
             }
 
             if(acked && t->isSyscallWaiting) {
+                if(SYSCALL_DEBUG) printf("Syscall returned! - pos7\n");
+            
+                assert(t->waitingSyscallType == READ);
                 this->returnSystemCall(t->waitingSyscall, 0);
                 t->isSyscallWaiting = false;
             }
@@ -601,21 +692,16 @@ void TCPAssignment::packetArrived(std::string fromModule, Packet* packet)
     if(tcp.data != NULL) {
         delete[] tcp.data;
     }
+
     return;
 }
 
 void TCPAssignment::timerCallback(void* payload)
 {
+    printf("payload : %p\n", payload);
     SocketBuffer *sb = (SocketBuffer *)payload;
-    bool isIn = false;
-    for(auto iter = sb->socket->sendBuf.begin(); iter != sb->socket->sendBuf.end(); iter++) {
-            SocketBuffer *sb2 = (SocketBuffer *)(*iter);
-            if(sb == sb2) {
-                isIn = true;
-                break;
-            }
-        }
-        assert(isIn);
+    printf("sb : %d %d %d\n", sb->seq, sb->len, sb->state);
+    this->cancelTimer(sb->timerUUID);
     //-Socket(sb->socket);
     if(sb->state == TcpState::TIMED_WAIT) {
         //sb->socket->state = TcpState::CLOSED;
@@ -626,7 +712,9 @@ void TCPAssignment::timerCallback(void* payload)
         delete sb;
         return;
     }
-    assert(sb->pkt != NULL);
+    if(sb->pkt == NULL || sb->socket == NULL)
+        return;
+    assert(sb->pkt != NULL && sb->socket != NULL);
     Packet *tmp = this->clonePacket(sb->pkt);
     this->sendPacket("IPv4", tmp);
     sb->timerUUID = this->addTimer(sb, TimeUtil::makeTime(DEFAULT_TIMEOUT, TimeUtil::MSEC));
@@ -698,6 +786,7 @@ uint16_t TCPAssignment::calculateTCPChecksum(int32_t srcIP, int32_t dstIP, TCPSe
         memcpy(&tmp[20], tcp.data, segmentLength - 20);
     
     uint16_t chk = ~NetworkUtil::tcp_sum(srcIP, dstIP, tmp, segmentLength);
+    delete[] tmp;
     return htons(chk);
 }
 
@@ -785,7 +874,6 @@ Socket *TCPAssignment::dupSocket(const Socket *orig)
     t->backlogLimit = 0;
     t->numBacklogs = 0;
     t->backlogs = std::map<Addr_t, Socket *>{};
-    t->established = std::queue<Socket *>{};
     t->isSyscallWaiting = false;
     t->waitingSA = NULL;
     t->waitingSocklen = NULL;
@@ -804,6 +892,7 @@ void TCPAssignment::finalizeServerEstablish(Socket *m, Socket *est)
 
     int connfd = this->createFileDescriptor(est->pid);
     if(connfd < 0) {      
+            if(SYSCALL_DEBUG) printf("Syscall returned! - pos8\n");
         this->returnSystemCall(m->waitingSyscall, -1);
         m->isSyscallWaiting = false;
         return;
@@ -827,6 +916,7 @@ void TCPAssignment::finalizeServerEstablish(Socket *m, Socket *est)
     this->dumpSocket(est);
     printf("---------syscall returned-----\n\n");
 */
+            if(SYSCALL_DEBUG) printf("Syscall returned! - pos9\n");
     this->returnSystemCall(m->waitingSyscall, connfd);
     m->isSyscallWaiting = false;
     m->waitingSA = NULL;
@@ -861,6 +951,7 @@ void TCPAssignment::cleanSocket(Socket *t)
 }
 
 void TCPAssignment::sendPacketAndQueue(Socket *t, Packet *pkt, uint16_t len, uint32_t timeout) {
+   
     SocketBuffer *buf_packet = new SocketBuffer;
     buf_packet->seq = t->seqNum;
     buf_packet->len = len;
@@ -1039,6 +1130,7 @@ int TCPAssignment::syscall_connect(UUID syscallUUID, int pid, int sockfd, SA *ad
     this->remoteSockets[t->remoteAddr] = t;
     
     t->isSyscallWaiting = true;
+    t->waitingSyscallType = CONNECT;
     t->waitingSyscall = syscallUUID;
     return 0;
 }
@@ -1055,7 +1147,7 @@ int TCPAssignment::syscall_listen(int pid, int sockfd, int backlog)
     t->numBacklogs = 0;
 
     t->backlogs = std::map<Addr_t, Socket *>();
-    t->established = std::queue<Socket *>();
+    t->established = std::set<Socket *>();
 
     //t->isServer = true;
     t->isMaster = true;
@@ -1076,13 +1168,14 @@ int TCPAssignment::syscall_accept(UUID syscallUUID, int pid, int sockfd, SA *add
     t->waitingSA = addr;
     t->waitingSocklen = addrlen;
     t->isSyscallWaiting = true;
+    t->waitingSyscallType = ACCEPT;
     t->waitingSyscall = syscallUUID;
 
     if(t->established.empty())
         return 0;
     
-    Socket *est = t->established.front();
-    t->established.pop();
+    Socket *est = (Socket *)(*t->established.begin());
+    t->established.erase(t->established.begin());
     
     this->finalizeServerEstablish(t, est);
     return 0;
@@ -1114,12 +1207,13 @@ int TCPAssignment::syscall_write(UUID syscallUUID, int pid, int sockfd, const vo
         t->szSendBuf += real_len;
 
         delete[] data;
-        if(t->szSendBuf > TCP_WIN_SIZE) {
+        if(t->szSendBuf > t->remoteWinSize) {
             t->isSyscallWaiting = true;
+            t->waitingSyscallType = WRITE;
             t->waitingSyscall = syscallUUID;
             t->waitingRet = i + real_len;
+            if(SYSCALL_DEBUG) printf("Waiting write here\n");
             return -2;
-
         }
     }
     return count;
@@ -1127,7 +1221,7 @@ int TCPAssignment::syscall_write(UUID syscallUUID, int pid, int sockfd, const vo
 
 int TCPAssignment::syscall_read(UUID syscallUUID, int pid, int sockfd, void *buf, size_t count) {
     Socket *t = getSocketByDescriptor(pid, sockfd);
-    if(t == NULL || t->state != TcpState::ESTAB)
+    if(t == NULL || t->state != TcpState::ESTAB || t->getEOF == true)
         return -1;
     if(count == 0)
         return 0;
@@ -1169,6 +1263,7 @@ int TCPAssignment::syscall_read(UUID syscallUUID, int pid, int sockfd, void *buf
 
     t->isSyscallWaiting = true;
     t->waitingRemain = remain;
+    t->waitingSyscallType = READ;
     t->waitingCnt = count;
     t->waitingBuf = &copy_buf[buf_offset];
     t->waitingSyscall = syscallUUID;

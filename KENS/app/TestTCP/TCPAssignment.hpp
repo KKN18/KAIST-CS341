@@ -103,6 +103,7 @@ typedef struct _Socket
     uint16_t remoteWinSize = TCP_WIN_SIZE;
     std::list<SocketBuffer *> sendBuf;
     std::set<SocketDataBuffer *, Cmp> localBuf;
+    bool getEOF = false;
     uint32_t nextAck;
 
     //For fast-retransmission
@@ -115,11 +116,12 @@ typedef struct _Socket
     uint32_t backlogLimit;
     uint32_t numBacklogs;
     std::map<Addr_t, struct _Socket *> backlogs;
-    std::queue<struct _Socket *> established;
+    std::set<struct _Socket *> established;
 
     //Syscall blocking
     bool isSyscallWaiting = false;
     UUID waitingSyscall;
+    int waitingSyscallType;
     SA *waitingSA;
     socklen_t *waitingSocklen;
     uint8_t *waitingBuf;
