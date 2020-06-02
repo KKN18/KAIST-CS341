@@ -163,7 +163,7 @@ void TCPAssignment::packetArrived(std::string fromModule, Packet* packet)
     /*printf("\n\n");
     printf("SYN ACK FIN : %d %d %d\n", isSYN, isACK, isFIN);
     printf("%d %d %d %d\n", tcp.srcPort, tcp.dstPort, ntohl(tcp.seqNum), ntohl(tcp.ackNum));
-    printf("%d %d %d\n", srcIP, dstIP, len);//*/
+    printf("%d %d %d\n", srcIP, dstIP, len);*/
 
     //Check Checksum here
     uint16_t calcChecksum = calculateTCPChecksum(srcIP, dstIP, tcp, len - 20); //Ethernet 14 byte, IP 20 byte
@@ -171,12 +171,9 @@ void TCPAssignment::packetArrived(std::string fromModule, Packet* packet)
         //printf("wrong checksum~\n");
         this->freePacket(packet);
         if(tcp.data != NULL) delete[] tcp.data;
-        //printf("dropped because of checksum\n");
         return;
     }
 
-
-    
     Socket *t = this->findSocketByLocalIP(dstIP, tcp.dstPort);
     //resolve master sockets
     Socket *r = this->findSocketByRemoteIP(srcIP, tcp.srcPort);
@@ -291,7 +288,7 @@ void TCPAssignment::packetArrived(std::string fromModule, Packet* packet)
         }
     }*/
     else if (isACK) { //data sender side
-        //bool isFound = false;
+        bool isFound = false;
         //find if there is unacked packet in local buffer
         for(auto iter = t->sendBuf.begin(); iter != t->sendBuf.end();) {
             SocketBuffer *sb = (SocketBuffer *)(*iter);
@@ -300,7 +297,7 @@ void TCPAssignment::packetArrived(std::string fromModule, Packet* packet)
                 break;
             if(ntohl(tcp.ackNum) == sb->seq + sb->len) {
                 //if find
-                //isFound = true;
+                isFound = true;
 
                 iter = t->sendBuf.erase(iter);
                 t->szSendBuf -= sb->len;
@@ -337,28 +334,35 @@ void TCPAssignment::packetArrived(std::string fromModule, Packet* packet)
             else
                 iter++;
         }
-        /*if(!isFound) {
+        //Fast Recovery Here
+        if(!isFound) {
             if(t->lastAck == ntohl(tcp.ackNum))
                 t->lastAckCnt++;
             else {
                 t->lastAckCnt = 0;
                 t->lastAck = ntohl(tcp.ackNum);
             }
-
             if(t->lastAckCnt == 3) {
+                
                 //Retransmit all in here (Fast retransmission)
-                printf("retransmit %d~\n", t->sendBuf.size());
+                t->congState = FAST_RECOV;
+                t->ssthresh = t->cwnd/2;
+                t->cwnd = t->ssthresh + 3*TCP_DATA_MAX;
+
                 for(auto iter = t->sendBuf.begin(); iter != t->sendBuf.end(); iter++) {
                     SocketBuffer *sb = (SocketBuffer *)(*iter);
-                    if(sb->pkt == NULL)
-                        continue;
-                    this->cancelTimer(sb->timerUUID);
-                    this->sendPacket("IPv4", this->clonePacket(sb->pkt));
-                    sb->timerUUID = this->addTimer(sb, TimeUtil::makeTime(DEFAULT_TIMEOUT, TimeUtil::MSEC));
+                    if(sb->seq == t->lastAck) {
+                        if(sb->pkt == NULL)
+                            continue;
+                        this->cancelTimer(sb->timerUUID);
+                        this->sendPacketAndQueue(t, sb->pkt, 0);
+                        t->sendBuf.erase(iter);
+                        t->lastAckCnt = 0;
+                        break;
+                    }
                 }
-                t->lastAckCnt = 0;
             }
-        }*/
+        }
     }
 
     //simultaneous cases
@@ -392,21 +396,40 @@ void TCPAssignment::packetArrived(std::string fromModule, Packet* packet)
     else if(isFIN && isACK && (t->state > TcpState::ESTAB)) {
         proper = true;
     }
-    /*else if(isFIN && isACK && t->state == TcpState::SYNRCVD && proper) {
-        t->state = TcpState::ESTAB;
-        if(t->isSyscallWaiting) {
-            this->returnSystemCall(t->waitingSyscall, 0);
-            t->isSyscallWaiting = false;
-        }
-    }*/
     
-
     if(!proper) { 
         //ignore improper ACK
         this->freePacket(packet);
         if(tcp.data != NULL) delete[] tcp.data;
         return;
     }        
+
+    //Here, the proper ACK is guaranteed
+    if(!(isSYN && t->state == TcpState::LISTEN)) {
+        t->RTTVAR = (1 - RTT_BETA) * t->RTTVAR + RTT_BETA * abs(t->SRTT - RTT);
+        t->SRTT = (1 - RTT_ALPHA) * t->SRTT + RTT_ALPHA * RTT;
+        t->RTO = t->SRTT + RTT_K * t->RTTVAR;
+
+        //printf("before change : %d |", t->cwnd);
+        switch(t->congState) {
+        case SLOW_START:
+            t->cwnd += TCP_DATA_MAX;
+            if(t->cwnd >= t->ssthresh)
+                t->congState = AVOIDANCE;
+            break;
+        case AVOIDANCE:
+            t->cwnd += TCP_DATA_MAX * TCP_DATA_MAX / t->cwnd;
+            //printf("status : %d %d\n", t->congState, t->cwnd);
+            break;
+        case FAST_RECOV:
+            t->cwnd = t->ssthresh;
+            t->congState = AVOIDANCE;
+        }
+        if(t->cwnd > TCP_WIN_SIZE)
+            t->cwnd = TCP_WIN_SIZE;
+
+        //printf(" %d\n", t->cwnd);
+    }
 
     //this->dumpSocket(t);
     if(isSYN) {
@@ -726,9 +749,15 @@ void TCPAssignment::timerCallback(void* payload)
     if(sb->pkt == NULL || sb->socket == NULL)
         return;
     
+    if(sb->socket != NULL) {
+        sb->socket->ssthresh = sb->socket->cwnd / 2;
+        sb->socket->cwnd = TCP_DATA_MAX;
+        sb->socket->congState = SLOW_START;
+    }
+
     Packet *tmp = this->clonePacket(sb->pkt);
     this->sendPacket("IPv4", tmp);
-    sb->timerUUID = this->addTimer(sb, TimeUtil::makeTime(DEFAULT_TIMEOUT, TimeUtil::MSEC));
+    sb->timerUUID = this->addTimer(sb, TimeUtil::makeTime(sb->socket->RTO, TimeUtil::MSEC));
 }
 
 /* Helper functions */
@@ -981,8 +1010,7 @@ void TCPAssignment::sendPacketAndQueue(Socket *t, Packet *pkt, uint16_t len, uin
     buf_packet->socket = t;
     buf_packet->state = t->state;
 
-    buf_packet->timerUUID = this->addTimer(buf_packet, TimeUtil::makeTime(timeout, TimeUtil::MSEC));
-
+    buf_packet->timerUUID = this->addTimer(buf_packet, TimeUtil::makeTime(timeout == 0 ? t->RTO : timeout, TimeUtil::MSEC));
     this->sendPacket("IPv4", pkt);
     t->sendBuf.push_back(buf_packet);
 }
@@ -1229,12 +1257,11 @@ int TCPAssignment::syscall_write(UUID syscallUUID, int pid, int sockfd, const vo
         t->szSendBuf += real_len;
 
         delete[] data;
-        if(t->szSendBuf > t->remoteWinSize) {
+        if(t->szSendBuf > std::min(t->cwnd, t->remoteWinSize)) {
             t->isSyscallWaiting = true;
             t->waitingSyscallType = WRITE;
             t->waitingSyscall = syscallUUID;
             t->waitingRet = i + real_len;
-            if(SYSCALL_DEBUG) printf("Waiting write here\n");
             return -2;
         }
     }

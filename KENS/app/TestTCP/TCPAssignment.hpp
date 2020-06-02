@@ -29,6 +29,11 @@
 #define TCP_WIN_SIZE 51200
 #define TCP_DATA_MAX 512
 
+#define RTT 100
+#define RTT_K 4
+#define RTT_ALPHA 0.125
+#define RTT_BETA 0.25
+
 #define DEFAULT_TIMEOUT 100
 #define TCP_MSL 60000
 
@@ -49,6 +54,13 @@ enum TcpState
     FINWAIT_2,
     LAST_ACK,
     TIMED_WAIT
+};
+
+enum CongestionState
+{
+    SLOW_START,
+    AVOIDANCE,
+    FAST_RECOV
 };
 
 typedef std::pair<int, int> Desc_t; // (pid, fid)
@@ -106,13 +118,21 @@ typedef struct _Socket
     bool getEOF = false;
     uint32_t nextAck;
 
+    //About Congestion Control
+    uint16_t cwnd = TCP_DATA_MAX;
+    uint32_t ssthresh = 128 * TCP_DATA_MAX;
+    CongestionState congState = SLOW_START;
+
+    float SRTT = RTT;
+    float RTTVAR = RTT/2;
+    uint32_t RTO = 3 * RTT;
+
     //For fast-retransmission
     uint32_t lastAck = 0;
     uint32_t lastAckCnt = 0;
 
     uint16_t szSendBuf = 0;
     uint16_t szLocalBuf = 0;
-    
     uint32_t backlogLimit;
     uint32_t numBacklogs;
     std::map<Addr_t, struct _Socket *> backlogs;
@@ -181,7 +201,7 @@ private:
     void finalizeServerEstablish(Socket *m, Socket *socket);
     void dumpSocket(const Socket *s);
     void cleanSocket(Socket *);
-    void sendPacketAndQueue(Socket *t, Packet *pkt, uint16_t len, uint32_t timeout = DEFAULT_TIMEOUT);
+    void sendPacketAndQueue(Socket *t, Packet *pkt, uint16_t len, uint32_t timeout = 0);
     
 public:
 	TCPAssignment(Host* host);
