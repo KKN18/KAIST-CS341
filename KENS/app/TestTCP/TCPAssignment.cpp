@@ -240,17 +240,6 @@ void TCPAssignment::packetArrived(std::string fromModule, Packet* packet)
                 assert(tcp.data == NULL);
                 return;
             }
-            else if(isRecv) {
-                //If it's data receiver side
-                t->getEOF = true;
-                if(t->isSyscallWaiting && t->waitingSyscallType == READ) {
-                    this->returnSystemCall(t->waitingSyscall, 0);
-                    t->isSyscallWaiting = false;
-                }
-                this->freePacket(packet);
-                assert(tcp.data == NULL);
-                return;
-            }
         }
     }
     /*if (isFIN && (t->state < TcpState::ESTAB || (t->state == TcpState::ESTAB &&
@@ -279,14 +268,15 @@ void TCPAssignment::packetArrived(std::string fromModule, Packet* packet)
             t->isSyscallWaiting = false;
             proper = true;
         }
-        /*else if(t->isSyscallWaiting && t->state == TcpState::ESTAB) {
+        else if(t->isSyscallWaiting && t->state == TcpState::ESTAB) {
             this->returnSystemCall(t->waitingSyscall, 0);
             t->isSyscallWaiting = false;
         }
         else {
             return;
         }
-    }*/
+    } */
+
     else if (isACK) { //data sender side
         bool isFound = false;
         //find if there is unacked packet in local buffer
@@ -557,7 +547,11 @@ void TCPAssignment::packetArrived(std::string fromModule, Packet* packet)
             Packet *reply = generateReplyACK(srcIP, dstIP, t->seqNum, tcp, t->winSize);
             this->sendPacket("IPv4", reply);
             t->ackNum = ntohl(tcp.seqNum)+1;
-
+            
+            if(t->isSyscallWaiting) {
+                this->returnSystemCall(t->waitingSyscall, 0);
+                t->isSyscallWaiting = false;
+            }
             //this->syscall_close(t->pid, t->fd);
         }
         else if(t->state == TcpState::FINWAIT_1) {
@@ -1038,12 +1032,13 @@ int TCPAssignment::syscall_socket(int pid, int type, int protocol)
 
 int TCPAssignment::syscall_close(int pid, int sockfd)
 {
+        printf("syscall : pid-fd %d-%d called close\n", pid, sockfd);
+
 	Socket *t = this->getSocketByDescriptor(pid, sockfd);
 	if(t == NULL)
 		return -1;
     //Lab 2-2 Start
     //Send FIN here
-    //printf("syscall : pid-fd %d-%d called close\n", pid, sockfd);
     if(t->state == ESTAB || t->state == CLOSE_WAIT) {
 
         uint8_t *fin;
