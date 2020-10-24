@@ -156,8 +156,6 @@ int process(int connfd) {
 
     _checksum = checksum(op, shift, msg_len, payload_len, buf);
 
-    if(VERBOSE) 
-
     if(_checksum != chk) {
         fprintf(stderr,"[%d] Error in request (checksum)\nExcpected %x as checksum, but %x was received as checksum\n", connfd, _checksum, chk);
         exit(-1);
